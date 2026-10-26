@@ -18,6 +18,7 @@ import {
   startManaged,
   stopManaged,
   restartManaged,
+  shutdownAll,
   dryRunEnabled,
 } from './process-manager.js';
 import { probeSplash } from './splash-client.js';
@@ -181,6 +182,28 @@ adminApi.post('/stop', async (_req, res) => {
 adminApi.post('/restart', async (_req, res) => {
   const result = await restartManaged(loadConfig());
   res.status(result.ok ? 200 : 400).json(result);
+});
+
+/**
+ * Full shutdown: stop managed Splash, then exit this node process (release :8000).
+ * Responds first so the UI can show success before the connection drops.
+ */
+adminApi.post('/shutdown', async (_req, res) => {
+  const result = await shutdownAll();
+  if (!result.ok) {
+    res.status(400).json({ ok: false, ...result });
+    return;
+  }
+  res.json({ ok: true, exiting: true, ...result });
+  setTimeout(() => {
+    try {
+      server.close(() => process.exit(0));
+    } catch {
+      process.exit(0);
+    }
+    // If close hangs, still exit
+    setTimeout(() => process.exit(0), 1500);
+  }, 200);
 });
 
 app.use('/admin/api', adminApi);

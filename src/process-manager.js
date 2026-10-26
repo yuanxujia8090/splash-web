@@ -262,6 +262,21 @@ export async function stopManaged({ timeoutMs = 8000 } = {}) {
 }
 
 /**
+ * Stop managed Splash (if any) as part of full splash-web shutdown.
+ * Does not exit the node process — caller (HTTP handler) does that after responding.
+ */
+export async function shutdownAll(opts = {}) {
+  const splash = await stopManaged(opts);
+  return {
+    ok: splash.ok !== false,
+    splash,
+    message: splash.ok === false
+      ? `停止上游失败：${splash.error || 'unknown'}`
+      : '已请求停止本端 Splash；splash-web 即将退出并释放对外端口',
+  };
+}
+
+/**
  * Call Splash install.local.prepare_local_model (same idea as run-splash-local.sh).
  * @param {{ localPath: string, draft: string|null, libexec: string, languageOnly?: boolean }} opts
  */

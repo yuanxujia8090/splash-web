@@ -282,6 +282,40 @@ $('btn-stop').addEventListener('click', () =>
   runAction(() => api('/stop', { method: 'POST', body: '{}' })),
 );
 
+const shutdownConfirm = $('shutdown-confirm');
+$('btn-shutdown').addEventListener('click', () => {
+  shutdownConfirm.hidden = false;
+  $('shutdown-msg').textContent = '';
+});
+$('btn-shutdown-no').addEventListener('click', () => {
+  shutdownConfirm.hidden = true;
+  $('shutdown-msg').textContent = '';
+});
+$('btn-shutdown-yes').addEventListener('click', async () => {
+  const msg = $('shutdown-msg');
+  msg.textContent = '正在关闭整体服务…';
+  $('btn-shutdown-yes').disabled = true;
+  $('btn-shutdown').disabled = true;
+  try {
+    const result = await api('/shutdown', { method: 'POST', body: '{}' });
+    msg.textContent =
+      (result.message || '已关闭') +
+      ' 若页面不再响应即表示 splash-web 已退出；可用 lsof -iTCP:8000 -sTCP:LISTEN 确认端口已释放。';
+  } catch (err) {
+    // Connection drop after exit is expected success
+    const dropped =
+      err?.name === 'TypeError' ||
+      /Failed to fetch|NetworkError|load failed|ECONNREFUSED/i.test(String(err?.message || err));
+    if (dropped) {
+      msg.textContent = '连接已断开：整体服务应已关闭。可用 lsof -iTCP:8000 -sTCP:LISTEN 确认。';
+      return;
+    }
+    msg.textContent = err.data ? JSON.stringify(err.data) : err.message;
+    $('btn-shutdown-yes').disabled = false;
+    $('btn-shutdown').disabled = false;
+  }
+});
+
 initTheme();
 init().catch((err) => {
   $('verdict').textContent = '管理端初始化失败：' + err.message;

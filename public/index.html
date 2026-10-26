@@ -173,8 +173,21 @@
     </main>
 
     <footer class="foot">
-      <span>Apache-2.0 · 无通用 shell · 白名单 flag only · huashu design</span>
-      <span id="config-path" class="mono"></span>
+      <div class="foot-meta">
+        <span>Apache-2.0 · 无通用 shell · 白名单 flag only · huashu design</span>
+        <span id="config-path" class="mono"></span>
+      </div>
+      <div class="shutdown-block">
+        <button type="button" id="btn-shutdown" class="btn btn-danger">关闭整体服务</button>
+        <div id="shutdown-confirm" class="shutdown-confirm" hidden>
+          <p class="shutdown-warn">确认关闭整体服务？将停止本端 Splash 与 splash-web，并释放 :8000。此操作不是只关浏览器标签。</p>
+          <div class="btn-row">
+            <button type="button" id="btn-shutdown-yes" class="btn btn-danger">确认关闭</button>
+            <button type="button" id="btn-shutdown-no" class="btn btn-ghost">取消</button>
+          </div>
+          <p class="hint" id="shutdown-msg"></p>
+        </div>
+      </div>
     </footer>
   </div>
   <script src="/admin/app.js" type="module"></script>
