@@ -6,6 +6,7 @@ import { validateConfigPatch } from './whitelist.js';
 const DEFAULT_CONFIG = {
   model: '',
   port: 8000,
+  upstreamPort: 18000,
   host: '127.0.0.1',
   maxMemory: '',
   maxContext: '',
@@ -43,6 +44,32 @@ export function ensureDirs() {
   fs.mkdirSync(runtimeDir(), { recursive: true });
 }
 
+/**
+ * Public (admin + reverse-proxy) listen port.
+ * Env SPLASH_WEB_PORT wins over config.port.
+ */
+export function resolvePublicPort(config = loadConfig()) {
+  if (process.env.SPLASH_WEB_PORT) {
+    const n = Number(process.env.SPLASH_WEB_PORT);
+    if (Number.isInteger(n) && n >= 1 && n <= 65535) return n;
+  }
+  const n = Number(config.port);
+  return Number.isInteger(n) && n >= 1 && n <= 65535 ? n : 8000;
+}
+
+/**
+ * Managed Splash upstream port (never the public admin port).
+ * Env SPLASH_WEB_UPSTREAM_PORT wins over config.upstreamPort.
+ */
+export function resolveUpstreamPort(config = loadConfig()) {
+  if (process.env.SPLASH_WEB_UPSTREAM_PORT) {
+    const n = Number(process.env.SPLASH_WEB_UPSTREAM_PORT);
+    if (Number.isInteger(n) && n >= 1 && n <= 65535) return n;
+  }
+  const n = Number(config.upstreamPort);
+  return Number.isInteger(n) && n >= 1 && n <= 65535 ? n : 18000;
+}
+
 export function loadConfig() {
   ensureDirs();
   const p = configPath();
@@ -71,12 +98,10 @@ export function saveConfig(patch) {
   ensureDirs();
   const current = loadConfig();
   const merged = { ...current, ...patch };
-  // Clear empty strings for optional fields by keeping them as ''
   const result = validateConfigPatch(merged);
   if (!result.ok) return result;
 
   const toWrite = { ...DEFAULT_CONFIG, ...result.config };
-  // Preserve keys that validate skipped (empty) — apply patch empties
   for (const key of Object.keys(patch)) {
     if (patch[key] === '' || patch[key] === null) {
       if (typeof DEFAULT_CONFIG[key] === 'boolean') toWrite[key] = false;

@@ -1,5 +1,7 @@
+const API = '/admin/api';
+
 async function api(path, opts = {}) {
-  const res = await fetch(path, {
+  const res = await fetch(API + path, {
     headers: { 'Content-Type': 'application/json', ...(opts.headers || {}) },
     ...opts,
   });
@@ -60,7 +62,7 @@ function showLog(el, text) {
   el.textContent = text || '';
 }
 
-function fillConfig(config) {
+function fillConfig(config, upstreamPort) {
   $('model').value = config.model || '';
   $('port').value = config.port ?? 8000;
   $('host').value = config.host || '127.0.0.1';
@@ -72,6 +74,11 @@ function fillConfig(config) {
   $('languageOnly').checked = !!config.languageOnly;
   $('noWebui').checked = !!config.noWebui;
   $('splashBinary').value = config.splashBinary || '';
+  const hint = $('upstream-hint');
+  if (hint) {
+    const up = upstreamPort ?? config.upstreamPort ?? 18000;
+    hint.textContent = `上游 Splash 端口（只读）：${up} — spawn 时绑定此端口，对外仍走上面的对外端口反代`;
+  }
 }
 
 function readForm() {
@@ -104,7 +111,8 @@ function renderStatus(data) {
     ['队列', s.queued ?? 0],
     ['HTTP 并发', `${s.httpActive ?? 0}${s.httpCapacity != null ? ' / ' + s.httpCapacity : ''}`],
     ['当前模型', s.model || '—'],
-    ['目标', `${data.configTarget?.host}:${data.configTarget?.port}`],
+    ['对外', `${data.configTarget?.host}:${data.configTarget?.port}`],
+    ['上游', String(data.configTarget?.upstreamPort ?? data.ownership?.upstreamPort ?? '—')],
   ];
   $('stats').innerHTML = rows
     .map(([k, v]) => `<div><dt>${k}</dt><dd>${escapeHtml(String(v))}</dd></div>`)
@@ -123,13 +131,13 @@ function escapeHtml(s) {
 }
 
 async function refreshStatus() {
-  const data = await api('/api/status');
+  const data = await api('/status');
   renderStatus(data);
   return data;
 }
 
 async function loadModels(selectedPath) {
-  const data = await api('/api/models');
+  const data = await api('/models');
   const sel = $('model-select');
   const groups = [
     { label: 'LM Studio (~/.lmstudio/models)', source: 'lmstudio' },
@@ -153,7 +161,7 @@ async function loadModels(selectedPath) {
 }
 
 async function init() {
-  const meta = await api('/api/meta');
+  const meta = await api('/meta');
   const badges = $('meta-badges');
   badges.innerHTML = '';
   const pills = [
@@ -169,8 +177,8 @@ async function init() {
   }
   $('config-path').textContent = meta.configPath;
 
-  const cfg = await api('/api/config');
-  fillConfig(cfg.config);
+  const cfg = await api('/config');
+  fillConfig(cfg.config, cfg.upstreamPort);
   await loadModels(cfg.config.model);
   await refreshStatus();
 }
@@ -189,7 +197,7 @@ $('config-form').addEventListener('submit', async (e) => {
   e.preventDefault();
   $('config-msg').textContent = '保存中…';
   try {
-    const saved = await api('/api/config', { method: 'PUT', body: JSON.stringify(readForm()) });
+    const saved = await api('/config', { method: 'PUT', body: JSON.stringify(readForm()) });
     $('config-msg').textContent = saved.message || '已保存。需重启才生效。';
     showLog($('preview'), saved.previewCommand || '');
     await refreshStatus();
@@ -201,8 +209,8 @@ $('config-form').addEventListener('submit', async (e) => {
 $('btn-preview').addEventListener('click', async () => {
   try {
     // save-less preview: put then get would mutate; use current saved + show form note
-    await api('/api/config', { method: 'PUT', body: JSON.stringify(readForm()) });
-    const p = await api('/api/preview-command');
+    await api('/config', { method: 'PUT', body: JSON.stringify(readForm()) });
+    const p = await api('/preview-command');
     showLog($('preview'), (p.dryRun ? '[DRY_RUN] ' : '') + p.display);
     $('config-msg').textContent = '已保存并预览。需重启才生效。';
   } catch (err) {
@@ -223,13 +231,13 @@ async function runAction(fn) {
 }
 
 $('btn-restart').addEventListener('click', () =>
-  runAction(() => api('/api/restart', { method: 'POST', body: '{}' })),
+  runAction(() => api('/restart', { method: 'POST', body: '{}' })),
 );
 $('btn-start').addEventListener('click', () =>
-  runAction(() => api('/api/start', { method: 'POST', body: '{}' })),
+  runAction(() => api('/start', { method: 'POST', body: '{}' })),
 );
 $('btn-stop').addEventListener('click', () =>
-  runAction(() => api('/api/stop', { method: 'POST', body: '{}' })),
+  runAction(() => api('/stop', { method: 'POST', body: '{}' })),
 );
 
 initTheme();

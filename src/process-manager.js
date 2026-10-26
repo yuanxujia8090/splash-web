@@ -6,7 +6,7 @@ import { spawn } from 'node:child_process';
 import fs from 'node:fs';
 import path from 'node:path';
 import { buildServeArgv } from './whitelist.js';
-import { ensureDirs, loadConfig, managedMetaPath, pidPath } from './config.js';
+import { ensureDirs, loadConfig, managedMetaPath, pidPath, resolveUpstreamPort } from './config.js';
 import { probeSplash, checkPortConflict, splashBaseUrl } from './splash-client.js';
 
 function dryRunEnabled() {
@@ -67,7 +67,8 @@ function pidAlive(pid) {
 }
 
 /**
- * Ownership of whatever is listening on the configured Splash port.
+ * Ownership of whatever is listening on the managed Splash upstream port.
+ * Never probe the public admin port (that is splash-web itself).
  */
 export async function ownershipStatus(config = loadConfig()) {
   const managedPid = readPidFile();
@@ -78,7 +79,8 @@ export async function ownershipStatus(config = loadConfig()) {
     clearManagedMeta();
   }
 
-  const probe = await probeSplash({ host: config.host, port: config.port });
+  const upstreamPort = resolveUpstreamPort(config);
+  const probe = await probeSplash({ host: config.host, port: upstreamPort });
   const aliveManaged = managedPid && pidAlive(managedPid);
 
   if (aliveManaged) {
@@ -87,8 +89,9 @@ export async function ownershipStatus(config = loadConfig()) {
       managedPid,
       meta,
       probe,
+      upstreamPort,
       canRestart: true,
-      message: `由本管理端拉起的 Splash（PID ${managedPid}）`,
+      message: `由本管理端拉起的 Splash（PID ${managedPid}，上游 :${upstreamPort}）`,
     };
   }
 
@@ -98,9 +101,10 @@ export async function ownershipStatus(config = loadConfig()) {
       managedPid: null,
       meta: null,
       probe,
+      upstreamPort,
       canRestart: false,
       message:
-        '检测到已有外部启动的 Splash（非本管理端拉起）。本端只读状态；请用本端「启动」前先手动停掉该服务，或继续只看状态，避免误杀。',
+        `检测到上游端口 ${upstreamPort} 上已有外部启动的 Splash（非本管理端拉起）。本端只读状态；请用本端「启动」前先手动停掉该服务，或继续只看状态，避免误杀。`,
     };
   }
 
@@ -109,8 +113,9 @@ export async function ownershipStatus(config = loadConfig()) {
     managedPid: null,
     meta: null,
     probe,
+    upstreamPort,
     canRestart: true,
-    message: '当前没有检测到 Splash 在配置端口上监听',
+    message: `当前没有检测到 Splash 在上游端口 ${upstreamPort} 上监听`,
   };
 }
 
@@ -190,14 +195,15 @@ export async function startManaged(config = loadConfig()) {
     return { ok: false, error: err.message };
   }
 
-  const port = Number(config.port) || 8000;
+  const port = resolveUpstreamPort(config);
   const host = config.host || '127.0.0.1';
   const conflict = await checkPortConflict(host, port);
   if (conflict.inUse) {
-    // If something is listening, re-check ownership message
     return {
       ok: false,
-      error: conflict.message,
+      error:
+        conflict.message +
+        `（这是 Splash 上游端口 ${port}；对外管理页仍在对外端口 /admin。）`,
       command: argv.display,
     };
   }

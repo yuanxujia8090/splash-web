@@ -7,7 +7,7 @@
   <link rel="preconnect" href="https://fonts.googleapis.com" />
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
   <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=Noto+Sans+SC:wght@400;500;700&display=swap" rel="stylesheet" />
-  <link rel="stylesheet" href="/style.css" />
+  <link rel="stylesheet" href="/admin/style.css" />
   <script>
     /* Apply theme before paint to avoid flash (default light). */
     (function () {
@@ -75,9 +75,10 @@
 
         <div class="two">
           <label>
-            端口
+            对外端口（管理页在 /admin，Splash API/聊天经同一端口反代）
             <input id="port" name="port" type="number" min="1" max="65535" />
           </label>
+          <p class="hint" id="upstream-hint" style="grid-column: 1 / -1; margin-top: -0.25rem;">上游 Splash 端口：—</p>
           <label>
             绑定地址
             <input id="host" name="host" type="text" value="127.0.0.1" />
@@ -126,6 +127,6 @@
     <span>Apache-2.0 · 无通用 shell · 白名单 flag only</span>
     <span id="config-path"></span>
   </footer>
-  <script src="/app.js" type="module"></script>
+  <script src="/admin/app.js" type="module"></script>
 </body>
 </html>

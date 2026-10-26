@@ -15,11 +15,18 @@ export const FLAG_SPECS = {
     help: '本地目录或 OWNER/REPO[:VARIANT]；优先选 LM Studio / oMLX 已有路径',
   },
   port: {
+    flag: null,
+    type: 'number',
+    restart: true,
+    label: '对外端口',
+    help: '对外端口（管理页在 /admin，Splash API/聊天经同一端口反代；默认 8000）',
+  },
+  upstreamPort: {
     flag: '--port',
     type: 'number',
     restart: true,
-    label: '端口',
-    help: 'Splash HTTP 端口（默认 8000）',
+    label: '上游端口',
+    help: '本端拉起的 Splash 实际监听端口（默认 18000；对外仍走 port 反代）',
   },
   host: {
     flag: '--host',
@@ -180,7 +187,7 @@ export function validateConfigPatch(input) {
       if (!Number.isFinite(n) || n < 0 || !Number.isInteger(n)) {
         return { ok: false, error: `${key} 必须是非负整数` };
       }
-      if (key === 'port' && (n < 1 || n > 65535)) {
+      if ((key === 'port' || key === 'upstreamPort') && (n < 1 || n > 65535)) {
         return { ok: false, error: '端口必须在 1–65535' };
       }
       config[key] = n;
@@ -237,7 +244,8 @@ export function buildServeArgv(config) {
   /** @type {string[]} */
   const args = ['serve', '--model', String(config.model)];
 
-  const skip = new Set(['model', 'splashBinary']);
+  // Public `port` is splash-web's listen port; Splash binds `upstreamPort`.
+  const skip = new Set(['model', 'splashBinary', 'port', 'upstreamPort']);
   for (const [key, value] of Object.entries(config)) {
     if (skip.has(key) || value === undefined || value === null || value === '') continue;
     const spec = FLAG_SPECS[key];
@@ -249,6 +257,12 @@ export function buildServeArgv(config) {
     }
     args.push(spec.flag, String(value));
   }
+
+  const upstream =
+    Number.isInteger(Number(config.upstreamPort)) && Number(config.upstreamPort) >= 1
+      ? Number(config.upstreamPort)
+      : 18000;
+  args.push('--port', String(upstream));
 
   // Force localhost bind if host omitted
   if (!config.host) {
