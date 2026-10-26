@@ -340,6 +340,25 @@ function appendWhitelistedFlags(config, skip, args) {
   }
 }
 
+
+/**
+ * Append --allowed-origin for the public page Origin(s).
+ * Browser Origin is the public port (e.g. :8000), not Splash upstream (:18000).
+ * Defaults to http://127.0.0.1:<port> and http://localhost:<port> only — never *.
+ * @param {Record<string, unknown>} config
+ * @param {string[]} args
+ */
+export function appendAllowedOrigins(config, args) {
+  const n = Number(config.port);
+  const publicPort = Number.isInteger(n) && n >= 1 && n <= 65535 ? n : 8000;
+  for (const origin of [
+    `http://127.0.0.1:${publicPort}`,
+    `http://localhost:${publicPort}`,
+  ]) {
+    args.push('--allowed-origin', origin);
+  }
+}
+
 function resolveUpstream(config) {
   return Number.isInteger(Number(config.upstreamPort)) && Number(config.upstreamPort) >= 1
     ? Number(config.upstreamPort)
@@ -403,6 +422,7 @@ export function buildLaunchPlan(config, opts = {}) {
     if (!config.host) {
       args.push('--host', '127.0.0.1');
     }
+    appendAllowedOrigins(config, args);
     const display = [splashBinary, ...args].map(shellQuote).join(' ');
     return {
       mode: 'serve',
@@ -463,6 +483,7 @@ export function buildLaunchPlan(config, opts = {}) {
   if (!config.host) {
     args.push('--host', '127.0.0.1');
   }
+  appendAllowedOrigins(config, args);
 
   const display = [
     `PYTHONPATH=${libexec}`,

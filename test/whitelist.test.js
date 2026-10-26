@@ -92,6 +92,12 @@ describe('buildServeArgv / buildLaunchPlan', () => {
     assert.ok(args.includes('--offline'));
     assert.ok(!display.includes('rm '));
     assert.ok(!args.some((a) => a.includes(';')));
+    // public Origin uses config.port (8000), not upstream 9000
+    const aoIdx = args.indexOf('--allowed-origin');
+    assert.ok(aoIdx >= 0, 'HF plan must pass --allowed-origin');
+    assert.ok(args.includes('http://127.0.0.1:8000'));
+    assert.ok(args.includes('http://localhost:8000'));
+    assert.equal(args.filter((a) => a === '--allowed-origin').length, 2);
   });
 
   it('HF id with useDflash + draftModel adds --draft-model', () => {
@@ -150,6 +156,42 @@ describe('buildServeArgv / buildLaunchPlan', () => {
     assert.equal(plan.env.PYTHONPATH, plan.libexec);
     const portIdx = plan.args.indexOf('--port');
     assert.equal(plan.args[portIdx + 1], '18000');
+    // local fixture omits port → default publicPort 8000
+    assert.ok(plan.args.includes('--allowed-origin'), 'local plan must pass --allowed-origin');
+    assert.ok(plan.args.includes('http://127.0.0.1:8000'));
+    assert.ok(plan.args.includes('http://localhost:8000'));
+    assert.equal(plan.args.filter((a) => a === '--allowed-origin').length, 2);
+  });
+
+  it('HF and local plans append allowed-origin for public port', () => {
+    const hf = buildLaunchPlan({
+      model: 'owner/repo:Q4',
+      port: 8010,
+      upstreamPort: 18000,
+      host: '127.0.0.1',
+      splashBinary: '/opt/homebrew/bin/splash',
+    });
+    assert.equal(hf.mode, 'serve');
+    assert.ok(hf.args.includes('http://127.0.0.1:8010'));
+    assert.ok(hf.args.includes('http://localhost:8010'));
+    assert.ok(!hf.args.includes('http://127.0.0.1:18000'), 'must not use upstream as Origin');
+    assert.ok(!hf.args.includes('*'));
+
+    const local = '/Users/yuanxj/.lmstudio/models/mlx-community/Qwen3.8-27B-4bit';
+    const loc = buildLaunchPlan(
+      {
+        model: local,
+        port: 8000,
+        upstreamPort: 18000,
+        host: '127.0.0.1',
+        splashBinary: '/opt/homebrew/bin/splash',
+      },
+      { preparedDir: '/tmp/prepared-fake', prepareLocal: false },
+    );
+    assert.equal(loc.mode, 'local');
+    assert.ok(loc.args.includes('http://127.0.0.1:8000'));
+    assert.ok(loc.args.includes('http://localhost:8000'));
+    assert.equal(loc.args.filter((a) => a === '--allowed-origin').length, 2);
   });
 
   it('defaults upstream --port to 18000 when omitted', () => {
