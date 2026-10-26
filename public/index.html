@@ -1,10 +1,25 @@
 <!DOCTYPE html>
-<html lang="zh-CN">
+<html lang="zh-CN" data-theme="light">
 <head>
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1" />
   <title>Splash Web 管理端</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com" />
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=Noto+Sans+SC:wght@400;500;700&display=swap" rel="stylesheet" />
   <link rel="stylesheet" href="/style.css" />
+  <script>
+    /* Apply theme before paint to avoid flash (default light). */
+    (function () {
+      try {
+        var t = localStorage.getItem('splash-web-theme');
+        if (t !== 'light' && t !== 'dark') t = 'light';
+        document.documentElement.setAttribute('data-theme', t);
+      } catch (e) {
+        document.documentElement.setAttribute('data-theme', 'light');
+      }
+    })();
+  </script>
 </head>
 <body>
   <header class="top">
@@ -12,7 +27,10 @@
       <h1>Splash Web</h1>
       <p class="sub">本机运维：配置 · 状态 · 重启（仅 localhost）</p>
     </div>
-    <div id="meta-badges" class="badges"></div>
+    <div class="top-actions">
+      <button type="button" id="btn-theme" class="theme-toggle" aria-label="切换浅色或深色主题">浅色 / 深色</button>
+      <div id="meta-badges" class="badges"></div>
+    </div>
   </header>
 
   <main class="grid">

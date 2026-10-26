@@ -16,6 +16,45 @@ function $(id) {
   return document.getElementById(id);
 }
 
+
+const THEME_KEY = 'splash-web-theme';
+
+function getTheme() {
+  try {
+    const t = localStorage.getItem(THEME_KEY);
+    return t === 'dark' || t === 'light' ? t : 'light';
+  } catch {
+    return 'light';
+  }
+}
+
+function applyTheme(theme) {
+  const next = theme === 'dark' ? 'dark' : 'light';
+  document.documentElement.setAttribute('data-theme', next);
+  try {
+    localStorage.setItem(THEME_KEY, next);
+  } catch {
+    /* ignore quota / private mode */
+  }
+  const btn = $('btn-theme');
+  if (btn) {
+    btn.textContent = next === 'dark' ? '浅色' : '深色';
+    btn.setAttribute('aria-label', next === 'dark' ? '切换到浅色主题' : '切换到深色主题');
+  }
+}
+
+function initTheme() {
+  applyTheme(getTheme());
+  const btn = $('btn-theme');
+  if (btn && !btn.dataset.themeBound) {
+    btn.dataset.themeBound = '1';
+    btn.addEventListener('click', () => {
+      applyTheme(getTheme() === 'dark' ? 'light' : 'dark');
+    });
+  }
+}
+
+
 function showLog(el, text) {
   el.hidden = !text;
   el.textContent = text || '';
@@ -193,6 +232,7 @@ $('btn-stop').addEventListener('click', () =>
   runAction(() => api('/api/stop', { method: 'POST', body: '{}' })),
 );
 
+initTheme();
 init().catch((err) => {
   $('verdict').textContent = '管理端初始化失败：' + err.message;
   $('verdict').className = 'verdict offline';
