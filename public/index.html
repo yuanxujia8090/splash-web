@@ -3,13 +3,13 @@
 <head>
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1" />
-  <title>Splash Web 管理端</title>
+  <title>Splash Web · 管理端</title>
   <link rel="preconnect" href="https://fonts.googleapis.com" />
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
-  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=Noto+Sans+SC:wght@400;500;700&display=swap" rel="stylesheet" />
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=Noto+Sans+SC:wght@400;500;700&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet" />
   <link rel="stylesheet" href="/admin/style.css" />
   <script>
-    /* Apply theme before paint to avoid flash (default light). */
+    /* Apply theme before paint (huashu tweaks: default light / dark:false). */
     (function () {
       try {
         var t = localStorage.getItem('splash-web-theme');
@@ -22,126 +22,161 @@
   </script>
 </head>
 <body>
-  <header class="top">
-    <div>
-      <h1>Splash Web</h1>
-      <p class="sub">本机运维：配置 · 状态 · 重启（仅 localhost）</p>
-    </div>
-    <div class="top-actions">
-      <button type="button" id="btn-theme" class="theme-toggle" aria-label="切换浅色或深色主题">浅色 / 深色</button>
-      <div id="meta-badges" class="badges"></div>
-    </div>
-  </header>
-
-  <main class="grid">
-    <section class="card" id="status-card">
-      <div class="card-h">
-        <h2>模型状态</h2>
-        <button type="button" id="btn-refresh" class="ghost">刷新</button>
+  <div class="shell">
+    <header class="topbar">
+      <div class="brand">
+        <div class="brand-mark" aria-hidden="true"></div>
+        <div class="brand-text">
+          <h1>Splash Web</h1>
+          <p class="sub">本机运维 · 仅 localhost</p>
+        </div>
       </div>
-      <div id="verdict" class="verdict">检测中…</div>
-      <dl class="stats" id="stats"></dl>
-      <p class="hint" id="ownership-msg"></p>
-    </section>
-
-    <section class="card" id="actions-card">
-      <h2>服务操作</h2>
-      <div class="row">
-        <button type="button" id="btn-restart" class="primary">安全重启</button>
-        <button type="button" id="btn-start" class="ghost">启动</button>
-        <button type="button" id="btn-stop" class="danger ghost">停止（仅本端进程）</button>
+      <div class="topbar-right">
+        <div id="meta-badges" class="badges"></div>
+        <button type="button" id="btn-theme" class="btn btn-theme" aria-label="切换浅色或深色主题">深色</button>
       </div>
-      <p class="hint">只管理本端拉起的 Splash。外来进程只读状态，不会误杀。</p>
-      <pre id="action-log" class="log" hidden></pre>
-    </section>
+    </header>
 
-    <section class="card wide" id="config-card">
-      <div class="card-h">
-        <h2>配置</h2>
-        <span class="pill warn">改完需重启才生效</span>
+    <main class="page">
+      <section class="panel" id="status-card" aria-labelledby="status-title">
+        <div class="panel-head">
+          <div>
+            <p class="eyebrow">Status</p>
+            <h2 id="status-title">模型状态</h2>
+          </div>
+          <button type="button" id="btn-refresh" class="btn btn-ghost">刷新</button>
+        </div>
+        <div id="verdict" class="verdict">检测中…</div>
+        <dl class="stats" id="stats"></dl>
+        <p class="hint" id="ownership-msg"></p>
+      </section>
+
+      <div class="split">
+        <section class="panel" id="actions-card" aria-labelledby="actions-title">
+          <div class="panel-head">
+            <div>
+              <p class="eyebrow">Actions</p>
+              <h2 id="actions-title">服务操作</h2>
+            </div>
+          </div>
+          <div class="btn-row">
+            <button type="button" id="btn-restart" class="btn btn-danger">安全重启</button>
+            <button type="button" id="btn-start" class="btn btn-primary">启动</button>
+            <button type="button" id="btn-stop" class="btn btn-ghost">停止（仅本端）</button>
+          </div>
+          <p class="hint">只管理本端拉起的 Splash。外来进程只读状态，不会误杀。</p>
+          <pre id="action-log" class="log" hidden></pre>
+        </section>
+
+        <section class="panel" id="model-card" aria-labelledby="model-title">
+          <div class="panel-head">
+            <div>
+              <p class="eyebrow">Models</p>
+              <h2 id="model-title">模型与 DFlash2</h2>
+            </div>
+            <span class="pill warn">改完需重启</span>
+          </div>
+          <div class="field-stack" id="model-fields">
+            <label class="field">
+              <span class="field-label">模型路径 (--model)</span>
+              <select id="model-select">
+                <option value="">— 从本机已有目录选择 —</option>
+              </select>
+            </label>
+            <label class="field">
+              <span class="field-label">或手填路径 / HF ID</span>
+              <input id="model" name="model" type="text" form="config-form" placeholder="/Users/…/models/owner/repo 或 owner/repo:VARIANT" autocomplete="off" />
+            </label>
+            <p class="hint">优先扫描 <code>~/.lmstudio/models</code> 与 <code>~/.omlx/models</code>，不重复下载。下拉选<strong>本地目录</strong>时走 Splash <code>prepare_local_model</code>；也可手填 <code>owner/repo</code> 走 <code>splash serve</code>。</p>
+
+            <div class="switch-row">
+              <label class="switch">
+                <input type="checkbox" id="useDflash" name="useDflash" form="config-form" />
+                <span class="switch-ui" aria-hidden="true"></span>
+                <span class="switch-text">启用 DFlash2 draft（27B 等推荐开启）</span>
+              </label>
+            </div>
+            <label class="field" id="draft-select-wrap">
+              <span class="field-label">DFlash2 draft 模型</span>
+              <select id="draft-select">
+                <option value="">— 选择 DFlash2 draft —</option>
+              </select>
+            </label>
+            <label class="field" id="draft-input-wrap">
+              <span class="field-label">或手填 draft 路径 / HF ID</span>
+              <input id="draftModel" name="draftModel" type="text" form="config-form" placeholder="~/.omlx/models/z-lab/Qwen3.8-27B-DFlash2 或 owner/repo" autocomplete="off" />
+            </label>
+            <p class="hint" id="dflash-hint">开启后启动会带上所选 draft（本地 prepare 传 draft=；splash serve 传 --draft-model）。关闭则不强制 draft。</p>
+          </div>
+        </section>
       </div>
-      <form id="config-form">
-        <label>
-          模型路径 (--model)
-          <select id="model-select">
-            <option value="">— 从本机已有目录选择 —</option>
-          </select>
-        </label>
-        <label>
-          或手填路径 / HF ID
-          <input id="model" name="model" type="text" placeholder="/Users/…/models/owner/repo 或 owner/repo:VARIANT" autocomplete="off" />
-        </label>
-        <p class="hint">优先扫描 <code>~/.lmstudio/models</code> 与 <code>~/.omlx/models</code>，不重复下载。下拉选<strong>本地目录</strong>时会走 Splash <code>prepare_local_model</code>；也可手填 <code>owner/repo</code> 走 <code>splash serve</code>。</p>
 
-        <div class="checks" style="margin-bottom: 0.75rem;">
-          <label class="check"><input type="checkbox" id="useDflash" name="useDflash" /> 启用 DFlash2 draft（27B 等推荐开启）</label>
+      <section class="panel panel-wide" id="config-card" aria-labelledby="config-title">
+        <div class="panel-head">
+          <div>
+            <p class="eyebrow">Config</p>
+            <h2 id="config-title">运行配置</h2>
+          </div>
+          <span class="pill warn">改完需重启才生效</span>
         </div>
-        <label id="draft-select-wrap">
-          DFlash2 draft 模型
-          <select id="draft-select">
-            <option value="">— 选择 DFlash2 draft —</option>
-          </select>
-        </label>
-        <label id="draft-input-wrap">
-          或手填 draft 路径 / HF ID
-          <input id="draftModel" name="draftModel" type="text" placeholder="~/.omlx/models/z-lab/Qwen3.8-27B-DFlash2 或 owner/repo" autocomplete="off" />
-        </label>
-        <p class="hint" id="dflash-hint">开启后启动会带上所选 draft（本地 prepare 传 draft=；splash serve 传 --draft-model）。关闭则不强制 draft（serve 仍可能按家族自动选）。</p>
+        <form id="config-form" class="config-form">
+          <div class="field-grid">
+            <label class="field">
+              <span class="field-label">对外端口（管理页在 /admin，Splash 经同一端口反代）</span>
+              <input id="port" name="port" type="number" min="1" max="65535" />
+            </label>
+            <label class="field">
+              <span class="field-label">绑定地址</span>
+              <input id="host" name="host" type="text" value="127.0.0.1" />
+            </label>
+          </div>
+          <p class="hint" id="upstream-hint">上游 Splash 端口：—</p>
 
-        <div class="two">
-          <label>
-            对外端口（管理页在 /admin，Splash API/聊天经同一端口反代）
-            <input id="port" name="port" type="number" min="1" max="65535" />
-          </label>
-          <p class="hint" id="upstream-hint" style="grid-column: 1 / -1; margin-top: -0.25rem;">上游 Splash 端口：—</p>
-          <label>
-            绑定地址
-            <input id="host" name="host" type="text" value="127.0.0.1" />
-          </label>
-        </div>
-        <div class="two">
-          <label>
-            内存上限 (--max-memory)
-            <input id="maxMemory" name="maxMemory" type="text" placeholder="如 28G，空=auto" />
-          </label>
-          <label>
-            上下文 (--max-context)
-            <input id="maxContext" name="maxContext" type="text" placeholder="如 128K，空=auto" />
-          </label>
-        </div>
-        <div class="two">
-          <label>
-            队列 (--queue-size)
-            <input id="queueSize" name="queueSize" type="number" min="1" />
-          </label>
-          <label>
-            空闲释放 (--idle-release)
-            <input id="idleRelease" name="idleRelease" type="text" placeholder="如 10m 或 off" />
-          </label>
-        </div>
-        <div class="checks">
-          <label class="check"><input type="checkbox" id="offline" name="offline" /> 离线 (--offline)</label>
-          <label class="check"><input type="checkbox" id="languageOnly" name="languageOnly" /> 仅语言 (--language-only)</label>
-          <label class="check"><input type="checkbox" id="noWebui" name="noWebui" /> 禁用内置聊天页</label>
-        </div>
-        <label>
-          splash 可执行文件
-          <input id="splashBinary" name="splashBinary" type="text" />
-        </label>
-        <div class="row">
-          <button type="submit" class="primary">保存配置</button>
-          <button type="button" id="btn-preview" class="ghost">预览启动命令</button>
-        </div>
-      </form>
-      <p class="hint" id="config-msg"></p>
-      <pre id="preview" class="log" hidden></pre>
-    </section>
-  </main>
+          <div class="field-grid">
+            <label class="field">
+              <span class="field-label">内存上限 (--max-memory)</span>
+              <input id="maxMemory" name="maxMemory" type="text" placeholder="如 28G，空=auto" />
+            </label>
+            <label class="field">
+              <span class="field-label">上下文 (--max-context)</span>
+              <input id="maxContext" name="maxContext" type="text" placeholder="如 128K，空=auto" />
+            </label>
+            <label class="field">
+              <span class="field-label">队列 (--queue-size)</span>
+              <input id="queueSize" name="queueSize" type="number" min="1" />
+            </label>
+            <label class="field">
+              <span class="field-label">空闲释放 (--idle-release)</span>
+              <input id="idleRelease" name="idleRelease" type="text" placeholder="如 10m 或 off" />
+            </label>
+          </div>
 
-  <footer>
-    <span>Apache-2.0 · 无通用 shell · 白名单 flag only</span>
-    <span id="config-path"></span>
-  </footer>
+          <div class="checks">
+            <label class="check"><input type="checkbox" id="offline" name="offline" /> 离线 (--offline)</label>
+            <label class="check"><input type="checkbox" id="languageOnly" name="languageOnly" /> 仅语言 (--language-only)</label>
+            <label class="check"><input type="checkbox" id="noWebui" name="noWebui" /> 禁用内置聊天页</label>
+          </div>
+
+          <label class="field">
+            <span class="field-label">splash 可执行文件</span>
+            <input id="splashBinary" name="splashBinary" type="text" />
+          </label>
+
+          <div class="btn-row">
+            <button type="submit" class="btn btn-primary">保存配置</button>
+            <button type="button" id="btn-preview" class="btn btn-secondary">预览启动命令</button>
+          </div>
+        </form>
+        <p class="hint" id="config-msg"></p>
+        <pre id="preview" class="log" hidden></pre>
+      </section>
+    </main>
+
+    <footer class="foot">
+      <span>Apache-2.0 · 无通用 shell · 白名单 flag only · huashu design</span>
+      <span id="config-path" class="mono"></span>
+    </footer>
+  </div>
   <script src="/admin/app.js" type="module"></script>
 </body>
 </html>
