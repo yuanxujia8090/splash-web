@@ -4,3 +4,4 @@ data/splash.pid
 data/managed.json
 .DS_Store
 *.log
+.vscode
