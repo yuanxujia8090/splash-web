@@ -1,6 +1,12 @@
 import { describe, it } from 'node:test';
 import assert from 'node:assert/strict';
-import { validateConfigPatch, buildServeArgv } from '../src/whitelist.js';
+import {
+  validateConfigPatch,
+  buildServeArgv,
+  buildLaunchPlan,
+  isLocalModelPath,
+  deriveHfIdFromLocalPath,
+} from '../src/whitelist.js';
 import { DEFAULT_CONFIG, resolvePublicPort, resolveUpstreamPort } from '../src/config.js';
 
 describe('validateConfigPatch', () => {
@@ -30,6 +36,8 @@ describe('validateConfigPatch', () => {
       maxMemory: '28G',
       maxContext: '128K',
       offline: true,
+      useDflash: true,
+      draftModel: '/Users/yuanxj/.omlx/models/z-lab/Qwen3.8-27B-DFlash2',
     });
     assert.equal(r.ok, true);
     assert.equal(r.needsRestart, true);
@@ -40,10 +48,32 @@ describe('validateConfigPatch', () => {
     assert.equal(r.ok, true);
     assert.equal(r.config.upstreamPort, 18000);
   });
+
+  it('accepts useDflash boolean', () => {
+    const r = validateConfigPatch({ useDflash: false });
+    assert.equal(r.ok, true);
+    assert.equal(r.config.useDflash, false);
+  });
 });
 
-describe('buildServeArgv', () => {
-  it('only emits whitelist flags and uses upstreamPort for --port', () => {
+describe('isLocalModelPath / deriveHfId', () => {
+  it('detects absolute and home paths', () => {
+    assert.equal(isLocalModelPath('/Users/yuanxj/.lmstudio/models/a/b'), true);
+    assert.equal(isLocalModelPath('~/models/a/b'), true);
+    assert.equal(isLocalModelPath('mlx-community/Qwen3.8-27B-4bit'), false);
+    assert.equal(isLocalModelPath('owner/repo:Q4'), false);
+  });
+
+  it('derives owner/repo from models/... path', () => {
+    assert.equal(
+      deriveHfIdFromLocalPath('/Users/yuanxj/.lmstudio/models/mlx-community/Qwen3.8-27B-4bit'),
+      'mlx-community/Qwen3.8-27B-4bit',
+    );
+  });
+});
+
+describe('buildServeArgv / buildLaunchPlan', () => {
+  it('HF id emits splash serve with whitelist flags and upstreamPort', () => {
     const { args, display } = buildServeArgv({
       model: 'owner/repo:Q4',
       port: 8000,
@@ -62,6 +92,64 @@ describe('buildServeArgv', () => {
     assert.ok(args.includes('--offline'));
     assert.ok(!display.includes('rm '));
     assert.ok(!args.some((a) => a.includes(';')));
+  });
+
+  it('HF id with useDflash + draftModel adds --draft-model', () => {
+    const plan = buildLaunchPlan({
+      model: 'mlx-community/Qwen3.8-27B-4bit',
+      upstreamPort: 18000,
+      host: '127.0.0.1',
+      useDflash: true,
+      draftModel: '/Users/yuanxj/.omlx/models/z-lab/Qwen3.8-27B-DFlash2',
+      splashBinary: '/opt/homebrew/bin/splash',
+    });
+    assert.equal(plan.mode, 'serve');
+    const idx = plan.args.indexOf('--draft-model');
+    assert.ok(idx >= 0);
+    assert.equal(plan.args[idx + 1], '/Users/yuanxj/.omlx/models/z-lab/Qwen3.8-27B-DFlash2');
+  });
+
+  it('HF id with useDflash false does not add --draft-model', () => {
+    const plan = buildLaunchPlan({
+      model: 'mlx-community/Qwen3.8-27B-4bit',
+      upstreamPort: 18000,
+      host: '127.0.0.1',
+      useDflash: false,
+      draftModel: '/Users/yuanxj/.omlx/models/z-lab/Qwen3.8-27B-DFlash2',
+      splashBinary: '/opt/homebrew/bin/splash',
+    });
+    assert.equal(plan.mode, 'serve');
+    assert.ok(!plan.args.includes('--draft-model'));
+  });
+
+  it('local path plans server.server with derived HF id (no splash serve)', () => {
+    const local = '/Users/yuanxj/.lmstudio/models/mlx-community/Qwen3.8-27B-4bit';
+    const plan = buildLaunchPlan(
+      {
+        model: local,
+        upstreamPort: 18000,
+        host: '127.0.0.1',
+        queueSize: 32,
+        useDflash: true,
+        draftModel: '/Users/yuanxj/.omlx/models/z-lab/Qwen3.8-27B-DFlash2',
+        splashBinary: '/opt/homebrew/bin/splash',
+      },
+      { preparedDir: '/tmp/prepared-fake', prepareLocal: false },
+    );
+    assert.equal(plan.mode, 'local');
+    assert.equal(plan.modelId, 'mlx-community/Qwen3.8-27B-4bit');
+    assert.ok(plan.args.includes('-m'));
+    assert.ok(plan.args.includes('server.server'));
+    assert.ok(plan.args.includes('/tmp/prepared-fake'));
+    assert.ok(plan.args.includes('--model'));
+    assert.ok(plan.args.includes('mlx-community/Qwen3.8-27B-4bit'));
+    assert.ok(plan.args.includes('--binary'));
+    assert.ok(!plan.args.includes('serve'));
+    assert.ok(!plan.args.includes('--draft-model'), 'draft is for prepare, not server.server');
+    assert.equal(plan.draft, '/Users/yuanxj/.omlx/models/z-lab/Qwen3.8-27B-DFlash2');
+    assert.equal(plan.env.PYTHONPATH, plan.libexec);
+    const portIdx = plan.args.indexOf('--port');
+    assert.equal(plan.args[portIdx + 1], '18000');
   });
 
   it('defaults upstream --port to 18000 when omitted', () => {

@@ -3,16 +3,20 @@
  * No arbitrary shell; only these keys may become argv.
  */
 
+import fs from 'node:fs';
+import os from 'node:os';
+import path from 'node:path';
+
 /** @typedef {'string'|'number'|'boolean'|'enum'} FlagType */
 
-/** @type {Record<string, { flag: string, type: FlagType, values?: string[], restart: boolean, label: string, help: string }>} */
+/** @type {Record<string, { flag: string|null, type: FlagType, values?: string[], restart: boolean, label: string, help: string }>} */
 export const FLAG_SPECS = {
   model: {
     flag: '--model',
     type: 'string',
     restart: true,
     label: '模型 (--model)',
-    help: '本地目录或 OWNER/REPO[:VARIANT]；优先选 LM Studio / oMLX 已有路径',
+    help: '本地目录或 OWNER/REPO[:VARIANT]；本地目录会走 prepare_local_model，HF ID 走 splash serve',
   },
   port: {
     flag: null,
@@ -63,12 +67,19 @@ export const FLAG_SPECS = {
     label: '空闲释放 (--idle-release)',
     help: '如 10m；off 表示不释放',
   },
+  useDflash: {
+    flag: null,
+    type: 'boolean',
+    restart: true,
+    label: '启用 DFlash2 draft',
+    help: '开启后启动时附带所选 draft；关闭则不强制（splash serve 仍可能自动选家族 draft）',
+  },
   draftModel: {
     flag: '--draft-model',
     type: 'string',
     restart: true,
-    label: 'Draft 模型',
-    help: '可选；覆盖自动选择的 DFlash2 draft',
+    label: 'DFlash2 draft (--draft-model)',
+    help: '本地 DFlash2 目录或 HF owner/repo；仅在启用 DFlash2 时生效',
   },
   revision: {
     flag: '--revision',
@@ -148,6 +159,93 @@ export const ALLOWED_CONFIG_KEYS = new Set(Object.keys(FLAG_SPECS));
 
 const LOCALHOST_HOSTS = new Set(['127.0.0.1', 'localhost', '::1']);
 
+/** Default local DFlash2 draft when present on Aaron's Mac / similar setups. */
+export const DEFAULT_LOCAL_DRAFT = path.join(
+  os.homedir(),
+  '.omlx',
+  'models',
+  'z-lab',
+  'Qwen3.8-27B-DFlash2',
+);
+
+/**
+ * True when model looks like a local filesystem path (not owner/repo).
+ * @param {unknown} model
+ */
+export function isLocalModelPath(model) {
+  if (typeof model !== 'string' || !model) return false;
+  const s = model.trim();
+  if (!s) return false;
+  // Absolute / home / relative filesystem paths
+  if (s.startsWith('/') || s.startsWith('~') || s.startsWith('./') || s.startsWith('../')) {
+    return true;
+  }
+  if (/^[A-Za-z]:[\\/]/.test(s)) return true;
+  // HF owner/repo[:variant] is not a local path
+  if (/^[^/\s]+\/[^/\s]+/.test(s)) return false;
+  return false;
+}
+
+/**
+ * @param {string} p
+ */
+export function expandUser(p) {
+  if (typeof p !== 'string') return p;
+  if (p === '~') return os.homedir();
+  if (p.startsWith('~/') || p.startsWith('~\\')) {
+    return path.join(os.homedir(), p.slice(2));
+  }
+  return p;
+}
+
+/**
+ * Derive HF owner/repo from a local model directory path.
+ * e.g. .../models/mlx-community/Qwen3.8-27B-4bit → mlx-community/Qwen3.8-27B-4bit
+ * @param {string} modelPath
+ */
+export function deriveHfIdFromLocalPath(modelPath) {
+  const expanded = path.resolve(expandUser(modelPath));
+  const parts = expanded.split(path.sep).filter(Boolean);
+  if (parts.length < 2) {
+    throw new Error(`无法从本地路径推导 HF id：${modelPath}`);
+  }
+  const modelsIdx = parts.lastIndexOf('models');
+  if (modelsIdx >= 0 && parts.length >= modelsIdx + 3) {
+    return `${parts[modelsIdx + 1]}/${parts[modelsIdx + 2]}`;
+  }
+  return `${parts[parts.length - 2]}/${parts[parts.length - 1]}`;
+}
+
+/**
+ * Resolve Splash libexec next to a brew splash binary.
+ * @param {string} [splashBinary]
+ */
+export function resolveSplashLibexec(splashBinary) {
+  const candidates = [];
+  if (splashBinary && typeof splashBinary === 'string') {
+    const bin = expandUser(splashBinary);
+    // /opt/homebrew/bin/splash → /opt/homebrew/opt/splash/libexec
+    candidates.push(path.resolve(path.dirname(bin), '..', 'opt', 'splash', 'libexec'));
+    // cellar: .../Cellar/splash/1.4.0/bin/splash → .../libexec (sibling of bin)
+    candidates.push(path.resolve(path.dirname(bin), '..', 'libexec'));
+  }
+  candidates.push('/opt/homebrew/opt/splash/libexec');
+  candidates.push('/usr/local/opt/splash/libexec');
+  for (const c of candidates) {
+    if (fs.existsSync(path.join(c, 'python', 'bin', 'python3'))) return c;
+    if (fs.existsSync(path.join(c, 'install', 'local.py'))) return c;
+  }
+  return candidates[0];
+}
+
+/**
+ * Whether a path/name looks like a DFlash draft model.
+ * @param {string} labelOrPath
+ */
+export function looksLikeDflash(labelOrPath) {
+  return /dflash/i.test(String(labelOrPath || ''));
+}
+
 /**
  * Validate and normalize a partial config update.
  * Rejects unknown keys and unsafe values.
@@ -203,8 +301,6 @@ export function validateConfigPatch(input) {
       if (raw.includes('\0') || /[\r\n]/.test(raw)) {
         return { ok: false, error: `${key} 含非法字符` };
       }
-      // Block shell metacharacters that would only matter if someone later shells out;
-      // we never use shell:true, but keep values conservative.
       if (/[;&|`$]/.test(raw)) {
         return { ok: false, error: `${key} 含禁止字符（;&|\`$）` };
       }
@@ -227,50 +323,174 @@ export function validateConfigPatch(input) {
 }
 
 /**
- * Build argv for `splash serve` from validated config. Never uses a shell.
+ * Extra whitelist flags shared by splash serve and server.server (excluding model/draft/port wiring).
  * @param {Record<string, unknown>} config
- * @returns {{ binary: string, args: string[], display: string }}
+ * @param {Set<string>} skip
  */
-export function buildServeArgv(config) {
-  const binary =
-    typeof config.splashBinary === 'string' && config.splashBinary
-      ? config.splashBinary
-      : 'splash';
-
-  if (!config.model || typeof config.model !== 'string') {
-    throw new Error('启动需要配置 model（--model）');
-  }
-
-  /** @type {string[]} */
-  const args = ['serve', '--model', String(config.model)];
-
-  // Public `port` is splash-web's listen port; Splash binds `upstreamPort`.
-  const skip = new Set(['model', 'splashBinary', 'port', 'upstreamPort']);
+function appendWhitelistedFlags(config, skip, args) {
   for (const [key, value] of Object.entries(config)) {
     if (skip.has(key) || value === undefined || value === null || value === '') continue;
     const spec = FLAG_SPECS[key];
     if (!spec || !spec.flag) continue;
-
     if (spec.type === 'boolean') {
       if (value === true) args.push(spec.flag);
       continue;
     }
     args.push(spec.flag, String(value));
   }
+}
 
-  const upstream =
-    Number.isInteger(Number(config.upstreamPort)) && Number(config.upstreamPort) >= 1
-      ? Number(config.upstreamPort)
-      : 18000;
+function resolveUpstream(config) {
+  return Number.isInteger(Number(config.upstreamPort)) && Number(config.upstreamPort) >= 1
+    ? Number(config.upstreamPort)
+    : 18000;
+}
+
+/**
+ * Build argv for `splash serve` (HF owner/repo path only). Prefer buildLaunchPlan for start.
+ * @param {Record<string, unknown>} config
+ * @returns {{ binary: string, args: string[], display: string }}
+ */
+export function buildServeArgv(config) {
+  const plan = buildLaunchPlan(config, { prepareLocal: false });
+  return { binary: plan.binary, args: plan.args, display: plan.display };
+}
+
+/**
+ * Full launch plan: HF id → splash serve; local path → python -m server.server (after prepare).
+ * @param {Record<string, unknown>} config
+ * @param {{ prepareLocal?: boolean, preparedDir?: string }} [opts]
+ */
+export function buildLaunchPlan(config, opts = {}) {
+  if (!config.model || typeof config.model !== 'string') {
+    throw new Error('启动需要配置 model（--model）');
+  }
+
+  const useDflash = config.useDflash === true;
+  const draftRaw =
+    useDflash && typeof config.draftModel === 'string' && config.draftModel.trim()
+      ? config.draftModel.trim()
+      : '';
+  const draftNote = useDflash
+    ? draftRaw
+      ? `DFlash2 已启用，draft=${draftRaw}`
+      : 'DFlash2 已启用但未选 draft：splash serve 将按家族自动选；本地 prepare 不传 draft='
+    : 'DFlash2 关闭：不强制 --draft-model / draft=（splash serve 仍可能自动选家族 draft）';
+
+  const local = isLocalModelPath(config.model);
+  const upstream = resolveUpstream(config);
+  const splashBinary =
+    typeof config.splashBinary === 'string' && config.splashBinary
+      ? config.splashBinary
+      : 'splash';
+
+  if (!local) {
+    /** @type {string[]} */
+    const args = ['serve', '--model', String(config.model)];
+    const skip = new Set([
+      'model',
+      'splashBinary',
+      'port',
+      'upstreamPort',
+      'useDflash',
+      'draftModel',
+    ]);
+    appendWhitelistedFlags(config, skip, args);
+    if (useDflash && draftRaw) {
+      args.push('--draft-model', draftRaw);
+    }
+    args.push('--port', String(upstream));
+    if (!config.host) {
+      args.push('--host', '127.0.0.1');
+    }
+    const display = [splashBinary, ...args].map(shellQuote).join(' ');
+    return {
+      mode: 'serve',
+      binary: splashBinary,
+      args,
+      display,
+      env: {},
+      modelId: String(config.model),
+      localPath: null,
+      preparedDir: null,
+      draft: useDflash && draftRaw ? draftRaw : null,
+      useDflash,
+      draftNote,
+      libexec: resolveSplashLibexec(splashBinary),
+    };
+  }
+
+  const localPath = path.resolve(expandUser(String(config.model)));
+  if (!fs.existsSync(localPath)) {
+    throw new Error(`本地模型目录不存在：${localPath}`);
+  }
+  const modelId = deriveHfIdFromLocalPath(localPath);
+  const libexec = resolveSplashLibexec(splashBinary);
+  const python = path.join(libexec, 'python', 'bin', 'python3');
+  const engine = path.join(libexec, 'engine', 'splash');
+  const preparedDir =
+    typeof opts.preparedDir === 'string' && opts.preparedDir
+      ? opts.preparedDir
+      : '<prepared-after-prepare_local_model>';
+
+  /** @type {string[]} */
+  const args = [
+    '-u',
+    '-P',
+    '-m',
+    'server.server',
+    preparedDir,
+    '--model',
+    modelId,
+    '--binary',
+    engine,
+  ];
+  // server.server has no --draft-model / --revision / --language-only / --offline
+  // (draft baked at prepare). Skip those + admin-only keys.
+  const skip = new Set([
+    'model',
+    'splashBinary',
+    'port',
+    'upstreamPort',
+    'useDflash',
+    'draftModel',
+    'revision',
+    'offline',
+    'languageOnly',
+  ]);
+  appendWhitelistedFlags(config, skip, args);
   args.push('--port', String(upstream));
-
-  // Force localhost bind if host omitted
   if (!config.host) {
     args.push('--host', '127.0.0.1');
   }
 
-  const display = [binary, ...args].map(shellQuote).join(' ');
-  return { binary, args, display };
+  const display = [
+    `PYTHONPATH=${libexec}`,
+    python,
+    ...args,
+  ]
+    .map(shellQuote)
+    .join(' ');
+
+  return {
+    mode: 'local',
+    binary: python,
+    args,
+    display,
+    env: {
+      PYTHONPATH: libexec,
+      PYTHONUNBUFFERED: '1',
+      TRANSFORMERS_VERBOSITY: 'error',
+    },
+    modelId,
+    localPath,
+    preparedDir: opts.preparedDir || null,
+    draft: useDflash && draftRaw ? expandUser(draftRaw) : null,
+    useDflash,
+    draftNote,
+    libexec,
+    needsPrepare: opts.prepareLocal !== false,
+  };
 }
 
 function shellQuote(s) {

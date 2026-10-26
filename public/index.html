@@ -71,7 +71,22 @@
           或手填路径 / HF ID
           <input id="model" name="model" type="text" placeholder="/Users/…/models/owner/repo 或 owner/repo:VARIANT" autocomplete="off" />
         </label>
-        <p class="hint">优先扫描 <code>~/.lmstudio/models</code> 与 <code>~/.omlx/models</code>，不重复下载。</p>
+        <p class="hint">优先扫描 <code>~/.lmstudio/models</code> 与 <code>~/.omlx/models</code>，不重复下载。下拉选<strong>本地目录</strong>时会走 Splash <code>prepare_local_model</code>；也可手填 <code>owner/repo</code> 走 <code>splash serve</code>。</p>
+
+        <div class="checks" style="margin-bottom: 0.75rem;">
+          <label class="check"><input type="checkbox" id="useDflash" name="useDflash" /> 启用 DFlash2 draft（27B 等推荐开启）</label>
+        </div>
+        <label id="draft-select-wrap">
+          DFlash2 draft 模型
+          <select id="draft-select">
+            <option value="">— 选择 DFlash2 draft —</option>
+          </select>
+        </label>
+        <label id="draft-input-wrap">
+          或手填 draft 路径 / HF ID
+          <input id="draftModel" name="draftModel" type="text" placeholder="~/.omlx/models/z-lab/Qwen3.8-27B-DFlash2 或 owner/repo" autocomplete="off" />
+        </label>
+        <p class="hint" id="dflash-hint">开启后启动会带上所选 draft（本地 prepare 传 draft=；splash serve 传 --draft-model）。关闭则不强制 draft（serve 仍可能按家族自动选）。</p>
 
         <div class="two">
           <label>

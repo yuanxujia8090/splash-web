@@ -2,11 +2,22 @@
  * Manage Splash processes spawned by this admin only.
  * Never shell:true. Never kill unmanaged PIDs without explicit policy.
  */
-import { spawn } from 'node:child_process';
+import { spawn, spawnSync } from 'node:child_process';
 import fs from 'node:fs';
 import path from 'node:path';
-import { buildServeArgv } from './whitelist.js';
-import { ensureDirs, loadConfig, managedMetaPath, pidPath, resolveUpstreamPort } from './config.js';
+import {
+  buildLaunchPlan,
+  expandUser,
+  isLocalModelPath,
+} from './whitelist.js';
+import {
+  ensureDirs,
+  loadConfig,
+  managedMetaPath,
+  pidPath,
+  resolveUpstreamPort,
+  runtimeDir,
+} from './config.js';
 import { probeSplash, checkPortConflict, splashBaseUrl } from './splash-client.js';
 
 function dryRunEnabled() {
@@ -55,6 +66,62 @@ function clearManagedMeta() {
   } catch {
     /* ignore */
   }
+}
+
+function lastFailurePath() {
+  return path.join(runtimeDir(), 'last-start-failure.json');
+}
+
+function writeLastFailure(info) {
+  ensureDirs();
+  fs.writeFileSync(lastFailurePath(), JSON.stringify(info, null, 2) + '\n', 'utf8');
+}
+
+function clearLastFailure() {
+  try {
+    fs.unlinkSync(lastFailurePath());
+  } catch {
+    /* ignore */
+  }
+}
+
+function readLastFailure() {
+  try {
+    return JSON.parse(fs.readFileSync(lastFailurePath(), 'utf8'));
+  } catch {
+    return null;
+  }
+}
+
+function serveLogPath() {
+  return path.join(runtimeDir(), 'splash-serve.log');
+}
+
+function readLogTail(logFile, maxBytes = 4000) {
+  try {
+    const st = fs.statSync(logFile);
+    const start = Math.max(0, st.size - maxBytes);
+    const fd = fs.openSync(logFile, 'r');
+    try {
+      const buf = Buffer.alloc(st.size - start);
+      fs.readSync(fd, buf, 0, buf.length, start);
+      return buf.toString('utf8').trim();
+    } finally {
+      fs.closeSync(fd);
+    }
+  } catch {
+    return '';
+  }
+}
+
+function extractReadableError(logTail) {
+  if (!logTail) return '进程已退出，日志为空';
+  const lines = logTail.split(/\r?\n/).filter(Boolean);
+  const interesting = [...lines].reverse().find((l) =>
+    /error:|Error|Traceback|cannot prepare|ModelError|argument --model|failed/i.test(l),
+  );
+  if (interesting) return interesting.slice(0, 500);
+  return lines.slice(-8).join('\n').slice(0, 800);
 }
 
 function pidAlive(pid) {
@@ -108,6 +175,24 @@ export async function ownershipStatus(config = loadConfig()) {
     };
   }
 
+  const failure = readLastFailure();
+  if (failure && failure.at) {
+    const ageMs = Date.now() - Date.parse(failure.at);
+    if (Number.isFinite(ageMs) && ageMs >= 0 && ageMs < 24 * 60 * 60 * 1000) {
+      const summary = failure.error || failure.logSummary || '见 splash-serve.log';
+      return {
+        kind: 'none',
+        managedPid: null,
+        meta: null,
+        probe,
+        upstreamPort,
+        canRestart: true,
+        lastFailure: failure,
+        message: `当前没有检测到 Splash 在上游端口 ${upstreamPort} 上监听。最近一次启动失败：${summary}`,
+      };
+    }
+  }
+
   return {
     kind: 'none',
     managedPid: null,
@@ -115,7 +200,7 @@ export async function ownershipStatus(config = loadConfig()) {
     probe,
     upstreamPort,
     canRestart: true,
-    message: `当前没有检测到 Splash 在上游端口 ${upstreamPort} 上监听`,
+    message: `当前没有检测到 Splash 在上游端口 ${upstreamPort} 上监听（尚未启动）`,
   };
 }
 
@@ -123,8 +208,16 @@ export async function ownershipStatus(config = loadConfig()) {
  * Build the command that would be run (also used by dry-run).
  */
 export function previewCommand(config = loadConfig()) {
-  const { binary, args, display } = buildServeArgv(config);
-  return { binary, args, display, dryRun: dryRunEnabled() };
+  const plan = buildLaunchPlan(config, { prepareLocal: false });
+  return {
+    binary: plan.binary,
+    args: plan.args,
+    display: plan.display,
+    mode: plan.mode,
+    modelId: plan.modelId,
+    draftNote: plan.draftNote,
+    dryRun: dryRunEnabled(),
+  };
 }
 
 /**
@@ -169,7 +262,84 @@ export async function stopManaged({ timeoutMs = 8000 } = {}) {
 }
 
 /**
+ * Call Splash install.local.prepare_local_model (same idea as run-splash-local.sh).
+ * @param {{ localPath: string, draft: string|null, libexec: string, languageOnly?: boolean }} opts
+ */
+export function prepareLocalModel({ localPath, draft, libexec, languageOnly = false }) {
+  const python = path.join(libexec, 'python', 'bin', 'python3');
+  if (!fs.existsSync(python)) {
+    return { ok: false, error: `Splash python 不存在：${python}（libexec=${libexec}）` };
+  }
+  const draftArg = draft ? expandUser(draft) : '';
+  if (draftArg && !fs.existsSync(draftArg)) {
+    return { ok: false, error: `DFlash2 draft 目录不存在：${draftArg}` };
+  }
+
+  const script = [
+    'import sys, json',
+    'root, model, draft, language_only = sys.argv[1:5]',
+    'sys.path.insert(0, root)',
+    'from install.local import prepare_local_model',
+    'kwargs = {}',
+    'if draft:',
+    '    kwargs["draft"] = draft',
+    'if language_only == "1":',
+    '    kwargs["language_only"] = True',
+    'prepared = prepare_local_model(model, **kwargs)',
+    'print(prepared)',
+  ].join('\n');
+
+  const result = spawnSync(
+    python,
+    ['-', libexec, localPath, draftArg, languageOnly ? '1' : '0'],
+    {
+      input: script,
+      encoding: 'utf8',
+      env: {
+        ...process.env,
+        PYTHONPATH: libexec,
+        PYTHONUNBUFFERED: '1',
+        TRANSFORMERS_VERBOSITY: 'error',
+      },
+      shell: false,
+      timeout: 10 * 60 * 1000,
+    },
+  );
+
+  if (result.error) {
+    return { ok: false, error: `prepare_local_model 无法执行：${result.error.message}` };
+  }
+  const stdout = (result.stdout || '').trim();
+  const stderr = (result.stderr || '').trim();
+  if (result.status !== 0) {
+    const detail = extractReadableError(stderr || stdout) || `exit ${result.status}`;
+    return {
+      ok: false,
+      error: `prepare_local_model 失败：${detail}`,
+      stderr: stderr.slice(-2000),
+    };
+  }
+  const prepared = stdout.split(/\r?\n/).filter(Boolean).at(-1);
+  if (!prepared || !fs.existsSync(prepared)) {
+    return {
+      ok: false,
+      error: `prepare_local_model 未返回有效目录：${prepared || '(empty)'}`,
+      stderr: stderr.slice(-2000),
+    };
+  }
+  return {
+    ok: true,
+    preparedDir: prepared,
+    draftUsed: draftArg || null,
+    note: draftArg
+      ? `已用本地 draft=${draftArg}`
+      : '未传 draft=，交由 Splash prepare 默认逻辑（可能查 HF cache）',
+  };
+}
+
+/**
  * Start Splash with whitelist argv. Respects DRY_RUN.
+ * Local absolute model paths use prepare_local_model + server.server.
  */
 export async function startManaged(config = loadConfig()) {
   const ownership = await ownershipStatus(config);
@@ -188,9 +358,9 @@ export async function startManaged(config = loadConfig()) {
     };
   }
 
-  let argv;
+  let plan;
   try {
-    argv = buildServeArgv(config);
+    plan = buildLaunchPlan(config, { prepareLocal: false });
   } catch (err) {
     return { ok: false, error: err.message };
   }
@@ -204,69 +374,172 @@ export async function startManaged(config = loadConfig()) {
       error:
         conflict.message +
         `（这是 Splash 上游端口 ${port}；对外管理页仍在对外端口 /admin。）`,
-      command: argv.display,
+      command: plan.display,
     };
   }
 
   if (dryRunEnabled()) {
     writeManagedMeta({
       dryRun: true,
-      command: argv.display,
-      binary: argv.binary,
-      args: argv.args,
+      command: plan.display,
+      binary: plan.binary,
+      args: plan.args,
+      mode: plan.mode,
+      draftNote: plan.draftNote,
       at: new Date().toISOString(),
     });
     return {
       ok: true,
       dryRun: true,
-      command: argv.display,
+      command: plan.display,
+      mode: plan.mode,
+      draftNote: plan.draftNote,
       message:
-        'DRY_RUN：未真正拉起模型。已生成白名单命令。去掉 SPLASH_WEB_DRY_RUN 后才会 spawn splash serve。',
+        'DRY_RUN：未真正拉起模型。已生成白名单命令。去掉 SPLASH_WEB_DRY_RUN 后才会 spawn。',
     };
   }
 
-  // Resolve binary without shell
-  const binary = argv.binary;
-  if (binary.includes('/') && !fs.existsSync(binary)) {
-    return { ok: false, error: `splash 可执行文件不存在：${binary}` };
+  let preparedInfo = null;
+  if (plan.mode === 'local') {
+    preparedInfo = prepareLocalModel({
+      localPath: plan.localPath,
+      draft: plan.draft,
+      libexec: plan.libexec,
+      languageOnly: config.languageOnly === true,
+    });
+    if (!preparedInfo.ok) {
+      const failure = {
+        at: new Date().toISOString(),
+        phase: 'prepare',
+        error: preparedInfo.error,
+        mode: 'local',
+        model: config.model,
+        draft: plan.draft,
+      };
+      writeLastFailure(failure);
+      return { ok: false, error: preparedInfo.error, phase: 'prepare', draftNote: plan.draftNote };
+    }
+    plan = buildLaunchPlan(config, {
+      prepareLocal: false,
+      preparedDir: preparedInfo.preparedDir,
+    });
+  }
+
+  if (plan.mode === 'serve') {
+    const binary = plan.binary;
+    if (binary.includes('/') && !fs.existsSync(binary)) {
+      return { ok: false, error: `splash 可执行文件不存在：${binary}` };
+    }
+  } else {
+    if (!fs.existsSync(plan.binary)) {
+      return { ok: false, error: `Splash python 不存在：${plan.binary}` };
+    }
   }
 
   ensureDirs();
-  const logPath = path.join(path.dirname(pidPath()), 'splash-serve.log');
+  const logPath = serveLogPath();
   const out = fs.openSync(logPath, 'a');
+  fs.writeSync(
+    out,
+    `\n==== splash-web start ${new Date().toISOString()} mode=${plan.mode} ====\n${plan.display}\n${plan.draftNote}\n`,
+  );
 
   let child;
   try {
-    child = spawn(binary, argv.args, {
+    child = spawn(plan.binary, plan.args, {
       detached: true,
       stdio: ['ignore', out, out],
-      env: { ...process.env },
+      env: { ...process.env, ...plan.env },
       shell: false,
+      cwd: plan.libexec || undefined,
     });
   } catch (err) {
+    try {
+      fs.closeSync(out);
+    } catch {
+      /* ignore */
+    }
+    const failure = {
+      at: new Date().toISOString(),
+      phase: 'spawn',
+      error: `spawn 失败：${err.message}`,
+      mode: plan.mode,
+      command: plan.display,
+    };
+    writeLastFailure(failure);
+    return { ok: false, error: failure.error, command: plan.display };
+  }
+
+  // Parent no longer needs the fd; child keeps it.
+  try {
     fs.closeSync(out);
-    return { ok: false, error: `spawn 失败：${err.message}`, command: argv.display };
+  } catch {
+    /* ignore */
   }
 
   child.unref();
   writePid(child.pid);
   writeManagedMeta({
     pid: child.pid,
-    command: argv.display,
-    binary: argv.binary,
-    args: argv.args,
+    command: plan.display,
+    binary: plan.binary,
+    args: plan.args,
+    mode: plan.mode,
+    modelId: plan.modelId,
+    preparedDir: preparedInfo?.preparedDir || null,
+    draft: plan.draft,
+    draftNote: plan.draftNote,
     logPath,
     at: new Date().toISOString(),
     baseUrl: splashBaseUrl({ host, port }),
   });
 
+  // Post-start check: refuse fake ok if process dies immediately (CLI validation etc.)
+  const waitMs = Number(process.env.SPLASH_WEB_START_WAIT_MS) || 1800;
+  await new Promise((r) => setTimeout(r, waitMs));
+
+  if (!pidAlive(child.pid)) {
+    clearPid();
+    clearManagedMeta();
+    const logTail = readLogTail(logPath);
+    const readable = extractReadableError(logTail);
+    const failure = {
+      at: new Date().toISOString(),
+      phase: 'post-start',
+      error: readable,
+      logSummary: readable,
+      logPath,
+      mode: plan.mode,
+      command: plan.display,
+      pid: child.pid,
+    };
+    writeLastFailure(failure);
+    return {
+      ok: false,
+      error: `Splash 启动后立即退出：${readable}`,
+      phase: 'post-start',
+      logPath,
+      logTail: logTail.slice(-1500),
+      command: plan.display,
+      draftNote: plan.draftNote,
+    };
+  }
+
+  clearLastFailure();
   return {
     ok: true,
     dryRun: false,
     pid: child.pid,
-    command: argv.display,
+    command: plan.display,
+    mode: plan.mode,
+    modelId: plan.modelId,
+    preparedDir: preparedInfo?.preparedDir || null,
+    draftNote: plan.draftNote,
     logPath,
-    message: `已启动 Splash（PID ${child.pid}）。加载大模型可能需要一段时间，请看 Ready 状态。`,
+    message:
+      plan.mode === 'local'
+        ? `已通过本地 prepare 启动 Splash（PID ${child.pid}，model id ${plan.modelId}）。大模型加载可能较久，请看 Ready。`
+        : `已启动 Splash（PID ${child.pid}）。加载大模型可能需要一段时间，请看 Ready 状态。`,
   };
 }
 
@@ -300,4 +573,9 @@ export async function restartManaged(config = loadConfig()) {
   };
 }
 
-export { dryRunEnabled, readPidFile, readManagedMeta };
+export {
+  dryRunEnabled,
+  readPidFile,
+  readManagedMeta,
+  readLastFailure,
+};

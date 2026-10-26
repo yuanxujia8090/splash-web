@@ -12,6 +12,8 @@ const DEFAULT_CONFIG = {
   maxContext: '',
   queueSize: 32,
   idleRelease: '',
+  useDflash: true,
+  draftModel: '',
   offline: false,
   languageOnly: false,
   noWebui: false,
@@ -70,11 +72,26 @@ export function resolveUpstreamPort(config = loadConfig()) {
   return Number.isInteger(n) && n >= 1 && n <= 65535 ? n : 18000;
 }
 
+function withDraftDefaults(config) {
+  const out = { ...config };
+  if (!out.draftModel) {
+    try {
+      // lazy import avoided: resolve default draft path inline
+      const home = os.homedir();
+      const draft = path.join(home, '.omlx', 'models', 'z-lab', 'Qwen3.8-27B-DFlash2');
+      if (fs.existsSync(draft)) out.draftModel = draft;
+    } catch {
+      /* ignore */
+    }
+  }
+  return out;
+}
+
 export function loadConfig() {
   ensureDirs();
   const p = configPath();
   if (!fs.existsSync(p)) {
-    return { ...DEFAULT_CONFIG };
+    return withDraftDefaults({ ...DEFAULT_CONFIG });
   }
   try {
     const raw = JSON.parse(fs.readFileSync(p, 'utf8'));
@@ -82,12 +99,12 @@ export function loadConfig() {
     const result = validateConfigPatch(merged);
     if (!result.ok) {
       console.warn('[splash-web] config invalid, using defaults:', result.error);
-      return { ...DEFAULT_CONFIG };
+      return withDraftDefaults({ ...DEFAULT_CONFIG });
     }
-    return { ...DEFAULT_CONFIG, ...result.config };
+    return withDraftDefaults({ ...DEFAULT_CONFIG, ...result.config });
   } catch (err) {
     console.warn('[splash-web] failed to read config:', err.message);
-    return { ...DEFAULT_CONFIG };
+    return withDraftDefaults({ ...DEFAULT_CONFIG });
   }
 }
 

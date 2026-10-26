@@ -29,6 +29,10 @@ npm start
 
 也可在输入框手填其它**本地**路径或 `OWNER/REPO[:VARIANT]`。管理端**不会**下载模型、不另建缓存目录。
 
+- **本地目录**（下拉或 `/` / `~` 开头）：走 Splash `prepare_local_model`，再 `python -m server.server <prepared> --model <owner/repo>`，复用 `~/.lmstudio/models` / `~/.omlx/models`。  
+- **HF `owner/repo`**：仍走 `splash serve --model …`。  
+- **DFlash2**：配置里可开开关并选择 draft；开启后本地 prepare 传 `draft=`，`splash serve` 传 `--draft-model`。关闭则不强制 draft。
+
 ## 能做什么
 
 | 能力 | 说明 |

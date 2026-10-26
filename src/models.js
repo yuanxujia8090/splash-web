@@ -76,6 +76,7 @@ function scanRoot(root, source) {
         path: ownerPath,
         label: owner.name,
         source,
+        dflash: /dflash/i.test(owner.name),
       });
       continue;
     }
@@ -95,6 +96,7 @@ function scanRoot(root, source) {
           path: repoPath,
           label: `${owner.name}/${repo.name}`,
           source,
+          dflash: /dflash/i.test(`${owner.name}/${repo.name}`),
         });
       } else {
         // one more level for variant folders (optional)
@@ -113,6 +115,7 @@ function scanRoot(root, source) {
               path: vPath,
               label: `${owner.name}/${repo.name}/${v.name}`,
               source,
+              dflash: /dflash/i.test(`${owner.name}/${repo.name}/${v.name}`),
             });
           }
         }
@@ -150,6 +153,6 @@ export function listPreferredModels() {
     preferredRoots: PREFERRED_MODEL_ROOTS,
     roots,
     models: unique,
-    note: '不下载模型；复用 ~/.lmstudio/models 与 ~/.omlx/models。可手填其它本地路径。',
+    note: '不下载模型；复用 ~/.lmstudio/models 与 ~/.omlx/models。可手填其它本地路径。名称含 DFlash 的标为 draft 候选。',
   };
 }

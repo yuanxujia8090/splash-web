@@ -73,7 +73,10 @@ function fillConfig(config, upstreamPort) {
   $('offline').checked = !!config.offline;
   $('languageOnly').checked = !!config.languageOnly;
   $('noWebui').checked = !!config.noWebui;
+  $('useDflash').checked = config.useDflash !== false;
+  $('draftModel').value = config.draftModel || '';
   $('splashBinary').value = config.splashBinary || '';
+  syncDflashUi();
   const hint = $('upstream-hint');
   if (hint) {
     const up = upstreamPort ?? config.upstreamPort ?? 18000;
@@ -93,6 +96,8 @@ function readForm() {
     offline: $('offline').checked,
     languageOnly: $('languageOnly').checked,
     noWebui: $('noWebui').checked,
+    useDflash: $('useDflash').checked,
+    draftModel: $('draftModel').value.trim(),
     splashBinary: $('splashBinary').value.trim(),
   };
 }
@@ -136,27 +141,58 @@ async function refreshStatus() {
   return data;
 }
 
-async function loadModels(selectedPath) {
+function syncDflashUi() {
+  const on = $('useDflash').checked;
+  const wraps = ['draft-select-wrap', 'draft-input-wrap'];
+  for (const id of wraps) {
+    const el = $(id);
+    if (el) el.style.opacity = on ? '1' : '0.45';
+  }
+  $('draft-select').disabled = !on;
+  $('draftModel').disabled = !on;
+  const hint = $('dflash-hint');
+  if (hint) {
+    hint.textContent = on
+      ? '开启：启动/重启会带上所选 draft（本地路径 → prepare draft=；HF id → --draft-model）。'
+      : '关闭：不强制 draft。splash serve 仍可能按模型家族自动选 DFlash2；本地 prepare 不传 draft=。';
+  }
+}
+
+async function loadModels(selectedPath, selectedDraft) {
   const data = await api('/models');
   const sel = $('model-select');
+  const draftSel = $('draft-select');
   const groups = [
     { label: 'LM Studio (~/.lmstudio/models)', source: 'lmstudio' },
     { label: 'oMLX (~/.omlx/models)', source: 'omlx' },
   ];
   sel.innerHTML = '<option value="">— 从本机已有目录选择 —</option>';
+  draftSel.innerHTML = '<option value="">— 选择 DFlash2 draft —</option>';
   for (const g of groups) {
     const opts = data.models.filter((m) => m.source === g.source);
     if (!opts.length) continue;
     const og = document.createElement('optgroup');
     og.label = g.label;
+    const dog = document.createElement('optgroup');
+    dog.label = g.label + ' · DFlash';
+    let hasDraft = false;
     for (const m of opts) {
       const o = document.createElement('option');
       o.value = m.path;
-      o.textContent = m.label;
+      o.textContent = m.dflash ? `${m.label} 〔DFlash2〕` : m.label;
       if (selectedPath && m.path === selectedPath) o.selected = true;
       og.appendChild(o);
+      if (m.dflash) {
+        hasDraft = true;
+        const d = document.createElement('option');
+        d.value = m.path;
+        d.textContent = m.label;
+        if (selectedDraft && m.path === selectedDraft) d.selected = true;
+        dog.appendChild(d);
+      }
     }
     sel.appendChild(og);
+    if (hasDraft) draftSel.appendChild(dog);
   }
 }
 
@@ -179,13 +215,19 @@ async function init() {
 
   const cfg = await api('/config');
   fillConfig(cfg.config, cfg.upstreamPort);
-  await loadModels(cfg.config.model);
+  await loadModels(cfg.config.model, cfg.config.draftModel);
   await refreshStatus();
 }
 
 $('model-select').addEventListener('change', (e) => {
   if (e.target.value) $('model').value = e.target.value;
 });
+
+$('draft-select').addEventListener('change', (e) => {
+  if (e.target.value) $('draftModel').value = e.target.value;
+});
+
+$('useDflash').addEventListener('change', () => syncDflashUi());
 
 $('btn-refresh').addEventListener('click', () => {
   refreshStatus().catch((err) => {
