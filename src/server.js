@@ -1,4 +1,5 @@
 import express from 'express';
+import fs from 'node:fs';
 import http from 'node:http';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -7,6 +8,7 @@ import {
   loadConfig,
   saveConfig,
   configPath,
+  runtimeDir,
   DEFAULT_CONFIG,
   resolvePublicPort,
   resolveUpstreamPort,
@@ -21,7 +23,14 @@ import {
   shutdownAll,
   dryRunEnabled,
 } from './process-manager.js';
-import { probeSplash } from './splash-client.js';
+import { fetchStatus, summarizeStatus } from './splash-client.js';
+import { SpeedSampler } from './token-speed.js';
+import {
+  applySamplingDefaults,
+  describeSampling,
+  shouldApplySampling,
+  SAMPLING_MAX_BODY_BYTES,
+} from './sampling.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const ROOT = path.join(__dirname, '..');
@@ -33,7 +42,55 @@ const ADMIN_PORT = resolvePublicPort(bootConfig);
 
 const app = express();
 
-app.use((req, res, next) => {
+/**
+ * 累计平均速度的落盘点：重启 splash-web / Splash 都不清零。
+ * 默认在 ~/.config/splash-web/ 下，跟 config.json 同目录。
+ */
+const SPEED_STATS_PATH = path.join(runtimeDir(), 'speed-stats.json');
+const SPEED_STATS_WRITE_INTERVAL_MS = 30_000;
+let lastSpeedStatsWrite = 0;
+
+function loadSpeedStats() {
+  try {
+    return JSON.parse(fs.readFileSync(SPEED_STATS_PATH, 'utf8'));
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * 节流写盘：平均速度不需要每秒落盘，30s 一次足够，丢的也只是几十秒增量。
+ * 写失败不影响读数，下一轮再试。
+ */
+function saveSpeedStats(state) {
+  const now = Date.now();
+  if (now - lastSpeedStatsWrite < SPEED_STATS_WRITE_INTERVAL_MS) return;
+  lastSpeedStatsWrite = now;
+  try {
+    fs.mkdirSync(runtimeDir(), { recursive: true });
+    const tmp = `${SPEED_STATS_PATH}.tmp`;
+    fs.writeFileSync(tmp, JSON.stringify(state, null, 2) + '\n', 'utf8');
+    fs.renameSync(tmp, SPEED_STATS_PATH);
+  } catch {
+    // 写盘失败：读数照常，下一轮重试
+  }
+}
+
+/**
+ * 速度采样器：每秒读一次上游 /status 的累计计数，用时间滑动窗口算 tok/s。
+ * 口径对齐 https://github.com/gsanhueza/pi-token-speed（详见 src/token-speed.js）。
+ * 懒启动：有管理页来读状态才跑；60s 没人读就自己停。
+ */
+const speedSampler = new SpeedSampler({
+  initialTotals: loadSpeedStats(),
+  persist: saveSpeedStats,
+  fetchStatus: async () => {
+    const config = loadConfig();
+    return fetchStatus({ host: config.host, port: resolveUpstreamPort(config) });
+  },
+});
+
+app.use((_req, res, next) => {
   res.setHeader('X-Splash-Web', '1');
   next();
 });
@@ -60,6 +117,7 @@ adminApi.get('/meta', (_req, res) => {
     },
     configPath: configPath(),
     preferredModelRoots: PREFERRED_MODEL_ROOTS,
+    sampling: describeSampling(config),
     dryRun: dryRunEnabled(),
     license: 'Apache-2.0',
     principles: [
@@ -117,6 +175,10 @@ adminApi.put('/config', (req, res) => {
   });
 });
 
+adminApi.get('/sampling', (_req, res) => {
+  res.json(describeSampling(loadConfig()));
+});
+
 adminApi.get('/models', (_req, res) => {
   res.json(listPreferredModels());
 });
@@ -125,8 +187,19 @@ adminApi.get('/status', async (_req, res) => {
   const config = loadConfig();
   const ownership = await ownershipStatus(config);
   const probe = ownership.probe;
+  // 这次 probe 已经拿到原始 status，顺手记一笔样本（比等下一轮采样更快出数）
+  if (probe.status) speedSampler.record(probe.status);
+  const speed = speedSampler.snapshot();
+  const summary = summarizeStatus(probe.status, speed);
   const publicPort = resolvePublicPort(config);
   const upstreamPort = resolveUpstreamPort(config);
+  // 没配 model 时 buildLaunchPlan 会抛错（刚装好、配置还空）；这不能让整个 /status 挂掉
+  let preview = null;
+  try {
+    preview = previewCommand(config).display;
+  } catch {
+    preview = null;
+  }
   res.json({
     configTarget: {
       host: config.host,
@@ -146,10 +219,11 @@ adminApi.get('/status', async (_req, res) => {
       reachable: probe.reachable,
       ready: probe.ready,
       error: probe.error,
-      summary: probe.summary,
+      summary,
+      speed,
     },
     dryRun: dryRunEnabled(),
-    previewCommand: previewCommand(config).display,
+    previewCommand: preview,
   });
 });
 
@@ -160,6 +234,24 @@ adminApi.get('/preview-command', (_req, res) => {
   } catch (err) {
     res.status(400).json({ ok: false, error: err.message });
   }
+});
+
+/**
+ * 手动重置累计平均值：管理页点「刷新」时调用。
+ * 只影响平均口径，不动滑动窗口，也不动 Splash 自己的计数。
+ */
+adminApi.post('/speed/reset', async (_req, res) => {
+  // 先拿一份当前读数当新基线，否则重置会退回到上一次采样（最多 1 秒前）
+  const config = loadConfig();
+  const fresh = await fetchStatus({
+    host: config.host,
+    port: resolveUpstreamPort(config),
+  });
+  const state = speedSampler.resetTotals(fresh);
+  // 强制落盘，否则重启后又把旧的平均值读回来
+  lastSpeedStatsWrite = 0;
+  saveSpeedStats(state);
+  res.json({ ok: true, resetAt: state.updatedAt });
 });
 
 adminApi.post('/start', async (_req, res) => {
@@ -195,6 +287,9 @@ adminApi.post('/shutdown', async (_req, res) => {
     return;
   }
   res.json({ ok: true, exiting: true, ...result });
+  // 退出前把累计平均值强制落盘（不守 30s 节流，否则丢最后一段）
+  lastSpeedStatsWrite = 0;
+  saveSpeedStats(speedSampler.totals.toJSON());
   setTimeout(() => {
     try {
       server.close(() => process.exit(0));
@@ -224,6 +319,7 @@ app.use('/admin', sendAdminIndex);
 /**
  * Reverse-proxy non-admin traffic to managed Splash on upstreamPort.
  * Uses Node http.request so streaming / long responses can pass through.
+ * JSON 请求体会先缓冲：只在客户端没写采样字段时补上本端默认值。
  */
 function proxyToUpstream(req, res) {
   const config = loadConfig();
@@ -231,7 +327,7 @@ function proxyToUpstream(req, res) {
   const upstreamHost = (config.host === '0.0.0.0' ? '127.0.0.1' : config.host) || '127.0.0.1';
 
   if (dryRunEnabled()) {
-    res.status(503).type('text/plain; charset=utf-8').send(
+    res.status(403).type('text/plain; charset=utf-8').send(
       [
         'splash-web DRY_RUN：管理页可用（/admin），未拉起 Splash，故无法反代。',
         `上游约定端口：${upstreamPort}`,
@@ -244,6 +340,8 @@ function proxyToUpstream(req, res) {
   const headers = { ...req.headers };
   headers.host = `${upstreamHost}:${upstreamPort}`;
 
+  let injected = '';
+
   const proxyReq = http.request(
     {
       hostname: upstreamHost,
@@ -254,7 +352,10 @@ function proxyToUpstream(req, res) {
       timeout: 0,
     },
     (proxyRes) => {
-      res.writeHead(proxyRes.statusCode || 502, proxyRes.headers);
+      res.writeHead(proxyRes.statusCode || 502, {
+        ...proxyRes.headers,
+        ...(injected ? { 'x-splash-web-sampling': injected } : {}),
+      });
       proxyRes.pipe(res);
     },
   );
@@ -276,7 +377,61 @@ function proxyToUpstream(req, res) {
     });
   });
 
-  req.pipe(proxyReq);
+  const declared = Number(req.headers['content-length']);
+  const buffered = shouldApplySampling(req)
+    && !(Number.isFinite(declared) && declared > SAMPLING_MAX_BODY_BYTES);
+
+  if (!buffered) {
+    req.pipe(proxyReq);
+    return;
+  }
+
+  // 缓冲请求体 → 补缺省 → 重写 content-length。超过上限则回退为原样转发。
+  /** @type {Buffer[]} */
+  const chunks = [];
+  let size = 0;
+  let overflow = false;
+
+  req.on('data', (chunk) => {
+    if (overflow) {
+      proxyReq.write(chunk);
+      return;
+    }
+    size += chunk.length;
+    chunks.push(chunk);
+    if (size > SAMPLING_MAX_BODY_BYTES) {
+      overflow = true;
+      for (const part of chunks) proxyReq.write(part);
+      chunks.length = 0;
+    }
+  });
+
+  req.on('end', () => {
+    if (overflow) {
+      proxyReq.end();
+      return;
+    }
+
+    let payload = Buffer.concat(chunks);
+    try {
+      const body = JSON.parse(payload.toString('utf8'));
+      const result = applySamplingDefaults(body, config);
+      if (Object.keys(result.applied).length) {
+        payload = Buffer.from(JSON.stringify(result.body), 'utf8');
+        injected = Object.entries(result.applied)
+          .map(([k, v]) => `${k}=${v}`)
+          .join(',');
+      }
+    } catch {
+      // 非 JSON / 解析失败：原样转发，不猜
+    }
+
+    proxyReq.removeHeader('transfer-encoding');
+    proxyReq.setHeader('content-length', String(payload.length));
+    proxyReq.end(payload);
+  });
+
+  req.on('aborted', () => proxyReq.destroy());
 }
 
 app.use((req, res) => {

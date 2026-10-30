@@ -157,6 +157,39 @@
             <label class="check"><input type="checkbox" id="noWebui" name="noWebui" /> 禁用内置聊天页</label>
           </div>
 
+          <fieldset class="sampling-block">
+            <legend>
+              采样默认值（补缺省注入，不用重启）
+              <span class="pill ok">即时生效</span>
+            </legend>
+            <p class="hint" id="sampling-note">
+              Splash 没有对应 CLI flag，采样值是<strong>每请求</strong>的。这里配的值由 splash-web 反代时补进请求体：
+              客户端显式写了 <code>temperature</code> / <code>top_p</code> / <code>top_k</code> 就不覆盖。
+            </p>
+            <div class="switch-row">
+              <label class="switch">
+                <input type="checkbox" id="applySamplingDefaults" name="applySamplingDefaults" form="config-form" />
+                <span class="switch-ui" aria-hidden="true"></span>
+                <span class="switch-text">启用注入（关闭则完全用 Splash 原生默认）</span>
+              </label>
+            </div>
+            <div class="field-grid">
+              <label class="field">
+                <span class="field-label">温度 temperature</span>
+                <input id="temperature" name="temperature" type="number" step="0.01" min="0" max="2" placeholder="1.0" />
+              </label>
+              <label class="field">
+                <span class="field-label">Top-P top_p</span>
+                <input id="topP" name="topP" type="number" step="0.01" min="0.01" max="1" placeholder="0.95" />
+              </label>
+              <label class="field">
+                <span class="field-label">Top-K top_k</span>
+                <input id="topK" name="topK" type="number" step="1" min="-1" placeholder="20" />
+              </label>
+            </div>
+            <p class="hint" id="sampling-baseline">Splash 原生默认：temperature 1.0 · top_p 0.95 · top_k 20</p>
+          </fieldset>
+
           <label class="field">
             <span class="field-label">splash 可执行文件</span>
             <input id="splashBinary" name="splashBinary" type="text" />

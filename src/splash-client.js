@@ -37,10 +37,32 @@ export function splashBaseUrl(target) {
 }
 
 /**
- * Summarize /status for the UI: ready, speed, concurrency/queue.
- * @param {any} status
+ * 只取上游 /status 原始 JSON（给速度采样器用，避免每次都走完整 probe）。
+ * @param {{ host?: string, port?: number }} target
+ * @returns {Promise<any|null>}
  */
-export function summarizeStatus(status) {
+export async function fetchStatus(target) {
+  const res = await fetchJson(`${splashBaseUrl(target)}/status`, 3000);
+  return res.ok ? res.body : null;
+}
+
+/** 把任意值收敛成有限数字，其它一律 null（0 是有效速度，不能被吞）。 */
+function finiteOrNull(value) {
+  if (value === null || value === undefined || value === '') return null;
+  const n = Number(value);
+  return Number.isFinite(n) ? n : null;
+}
+
+/**
+ * Summarize /status for the UI: ready, speed, concurrency/queue.
+ *
+ * @param {any} status 上游 /status 原始 JSON
+ * @param {{ decodeTokPerSec?: number|null, prefillTokPerSec?: number|null,
+ *   decodeWindowTokPerSec?: number|null, prefillWindowTokPerSec?: number|null }} [speed]
+ *   由 token-speed 采样器算出的速度（口径对齐 pi-token-speed 的时间滑动窗口）。
+ *   不传则退回 Splash 自带字段（当前批优先，其次累计平均）。
+ */
+export function summarizeStatus(status, speed = null) {
   if (!status || typeof status !== 'object') {
     return {
       ready: false,
@@ -51,6 +73,7 @@ export function summarizeStatus(status) {
       port: null,
       decodeTokPerSec: null,
       prefillTokPerSec: null,
+      speedSource: speed?.source || 'none',
       activeRequests: 0,
       queued: 0,
       httpActive: 0,
@@ -70,8 +93,18 @@ export function summarizeStatus(status) {
   const currentDecode = metrics.current_decode_batch?.tokens_per_second || 0;
   const currentPrefill = metrics.current_prefill_batch?.tokens_per_second || 0;
 
-  const displayDecode = currentDecode || decodeTok;
-  const displayPrefill = currentPrefill || prefillTok;
+  // 速度口径：优先用滑动窗口（与 pi-token-speed 一致），没测到再退回 Splash 字段。
+  const measuredDecode = finiteOrNull(speed?.decodeTokPerSec);
+  const measuredPrefill = finiteOrNull(speed?.prefillTokPerSec);
+  const displayDecode = measuredDecode ?? (currentDecode || decodeTok);
+  const displayPrefill = measuredPrefill ?? (currentPrefill || prefillTok);
+
+  // 「在算」只看窗口实时值；回退到平均时不能算活跃，否则空闲也会常亮。
+  const liveDecode = finiteOrNull(speed?.decodeWindowTokPerSec) ?? 0;
+  const livePrefill = finiteOrNull(speed?.prefillWindowTokPerSec) ?? 0;
+  const throughputActive = speed
+    ? liveDecode > 0 || livePrefill > 0
+    : displayDecode > 0 || displayPrefill > 0;
 
   const queued =
     Number(scheduler.queued) ||
@@ -90,7 +123,7 @@ export function summarizeStatus(status) {
   if (!ready) {
     verdict = 'not_ready';
     verdictLabel = '未 Ready（可能在加载或已释放权重）';
-  } else if (active > 0 || displayDecode > 0 || displayPrefill > 0 || Number(scheduler.prefilling) > 0) {
+  } else if (active > 0 || throughputActive || Number(scheduler.prefilling) > 0) {
     verdict = 'computing';
     verdictLabel = '在算（有活跃请求或吞吐）';
   } else if (queued > 0) {
@@ -110,6 +143,7 @@ export function summarizeStatus(status) {
     port: instance.port || null,
     decodeTokPerSec: displayDecode,
     prefillTokPerSec: displayPrefill,
+    speedSource: speed?.source || 'splash',
     activeRequests: active,
     queued,
     httpActive: Number(http.requests?.active) || 0,
@@ -150,7 +184,7 @@ export async function probeSplash(target) {
 /**
  * Check if a TCP port is already bound (best-effort via fetch or net).
  */
-export async function checkPortConflict(host, port, excludeSplashProbe = true) {
+export async function checkPortConflict(host, port, _excludeSplashProbe = true) {
   // Use Node net to see if something accepts connections
   const net = await import('node:net');
   const h = host === '0.0.0.0' ? '127.0.0.1' : host || '127.0.0.1';

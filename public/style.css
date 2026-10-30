@@ -334,6 +334,43 @@ h2 {
   word-break: break-all;
 }
 
+/* 速度来源：实时窗口 / 历史平均，别让数值回落被误判成性能掉了 */
+.stats .speed-tag {
+  display: inline-block;
+  margin-left: 0.4rem;
+  padding: 0.02rem 0.34rem;
+  border: 1px solid transparent;
+  border-radius: 999px;
+  font-size: 0.64rem;
+  font-weight: 500;
+  letter-spacing: 0.02em;
+  vertical-align: 0.14em;
+  white-space: nowrap;
+}
+
+.stats .speed-tag.live {
+  color: var(--accent);
+  border-color: color-mix(in srgb, var(--accent) 30%, transparent);
+  background: color-mix(in srgb, var(--accent) 9%, transparent);
+}
+
+.stats .speed-tag.avg {
+  color: var(--muted);
+  border-color: var(--hairline);
+  background: transparent;
+}
+
+/* 对照用的累计平均值：比主值浅一档，不抢读数 */
+.stats .speed-avg {
+  display: inline-block;
+  margin-left: 0.45rem;
+  font-size: 0.72rem;
+  font-weight: 400;
+  color: var(--muted);
+  opacity: 0.7;
+  white-space: nowrap;
+}
+
 /* —— Buttons —— */
 .btn-row {
   display: flex;
@@ -520,6 +557,31 @@ select:disabled {
 /* Switch (DFlash) */
 .switch-row {
   margin: 0.35rem 0 0.85rem;
+}
+
+/* 采样默认值：与运行配置同面板，用细边框分组 */
+.sampling-block {
+  margin: 0.5rem 0 1.25rem;
+  padding: 1rem 1.1rem 0.35rem;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  background: var(--surface-soft);
+}
+
+.sampling-block legend {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  padding: 0 0.35rem;
+  font-size: 0.82rem;
+  font-weight: 600;
+  letter-spacing: 0.04em;
+  text-transform: none;
+  color: var(--text-secondary);
+}
+
+.sampling-block .hint {
+  margin-top: 0;
 }
 
 .switch {

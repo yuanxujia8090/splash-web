@@ -76,6 +76,10 @@ function fillConfig(config, upstreamPort) {
   $('useDflash').checked = config.useDflash !== false;
   $('draftModel').value = config.draftModel || '';
   $('splashBinary').value = config.splashBinary || '';
+  $('applySamplingDefaults').checked = config.applySamplingDefaults !== false;
+  $('temperature').value = config.temperature ?? 1.0;
+  $('topP').value = config.topP ?? 0.95;
+  $('topK').value = config.topK ?? 20;
   syncDflashUi();
   const hint = $('upstream-hint');
   if (hint) {
@@ -85,6 +89,11 @@ function fillConfig(config, upstreamPort) {
 }
 
 function readForm() {
+  // 空输入 → '' （saveConfig 会回落到默认值），避免 Number('') = 0 把温度误设成贪心
+  const num = (id) => {
+    const raw = $(id).value.trim();
+    return raw === '' ? '' : Number(raw);
+  };
   return {
     model: $('model').value.trim(),
     port: Number($('port').value),
@@ -99,19 +108,59 @@ function readForm() {
     useDflash: $('useDflash').checked,
     draftModel: $('draftModel').value.trim(),
     splashBinary: $('splashBinary').value.trim(),
+    applySamplingDefaults: $('applySamplingDefaults').checked,
+    temperature: num('temperature'),
+    topP: num('topP'),
+    topK: num('topK'),
   };
+}
+
+// 保留 1 位小数：123.456 → 123.5，5 → 5.0，0 → 0.0
+function fixed1(v) {
+  const n = Number(v);
+  if (v == null || v === '' || !Number.isFinite(n)) return '—';
+  return n.toFixed(1);
+}
+
+// 主值已经是平均值时不重复；只有主值走了实时窗口，才把平均挂出来对比
+function averageOf(average, source) {
+  if (source !== 'window') return null;
+  // 注意：不能先 Number(null) —— 那会得到 0，把「还没累计」显示成「平均 0.0」
+  if (average === null || average === undefined || average === '') return null;
+  const n = Number(average);
+  return Number.isFinite(n) ? n : null;
+}
+
+// 速度来源标记：让「实时窗口」和「历史平均」一眼可分，别让数值回落被误判成性能掉了
+function speedTag(source) {
+  if (source === 'window') {
+    return {
+      label: '实时',
+      tone: 'live',
+      title: '最近约 1 秒的实测吞吐（对齐 pi-token-speed 的滑动窗口）',
+    };
+  }
+  if (source === 'average') {
+    return {
+      label: '平均',
+      tone: 'avg',
+      title: '最近 1 秒没有新增 token，显示 Splash 的累计平均速度',
+    };
+  }
+  return null;
 }
 
 function renderStatus(data) {
   const s = data.probe?.summary || {};
+  const speed = data.probe?.speed || {};
   const verdict = $('verdict');
   verdict.textContent = s.verdictLabel || (data.probe?.reachable ? '未知' : '离线');
   verdict.className = 'verdict ' + (s.verdict || 'offline');
 
   const rows = [
     ['Ready', data.probe?.ready ? '是' : '否'],
-    ['Decode tok/s', s.decodeTokPerSec ?? '—'],
-    ['Prefill tok/s', s.prefillTokPerSec ?? '—'],
+    ['Decode tok/s', fixed1(s.decodeTokPerSec), speedTag(speed.decodeSource), averageOf(speed.decodeAverageTokPerSec, speed.decodeSource)],
+    ['Prefill tok/s', fixed1(s.prefillTokPerSec), speedTag(speed.prefillSource), averageOf(speed.prefillAverageTokPerSec, speed.prefillSource)],
     ['活跃请求', s.activeRequests ?? 0],
     ['队列', s.queued ?? 0],
     ['HTTP 并发', `${s.httpActive ?? 0}${s.httpCapacity != null ? ' / ' + s.httpCapacity : ''}`],
@@ -119,9 +168,31 @@ function renderStatus(data) {
     ['对外', `${data.configTarget?.host}:${data.configTarget?.port}`],
     ['上游', String(data.configTarget?.upstreamPort ?? data.ownership?.upstreamPort ?? '—')],
   ];
-  $('stats').innerHTML = rows
-    .map(([k, v]) => `<div><dt>${k}</dt><dd>${escapeHtml(String(v))}</dd></div>`)
-    .join('');
+  const stats = $('stats');
+  stats.textContent = '';
+  for (const [k, v, tag, average] of rows) {
+    const row = document.createElement('div');
+    const dt = document.createElement('dt');
+    dt.textContent = String(k);
+    const dd = document.createElement('dd');
+    dd.textContent = String(v);
+    if (tag) {
+      const badge = document.createElement('span');
+      badge.className = 'speed-tag ' + tag.tone;
+      badge.textContent = tag.label;
+      badge.title = tag.title;
+      dd.append(badge);
+    }
+    if (average !== null) {
+      const avg = document.createElement('span');
+      avg.className = 'speed-avg';
+      avg.textContent = '平均 ' + fixed1(average);
+      avg.title = 'Splash 上报的累计平均速度，用来对照实时值';
+      dd.append(avg);
+    }
+    row.append(dt, dd);
+    stats.append(row);
+  }
 
   $('ownership-msg').textContent = data.ownership?.message || '';
   const can = data.ownership?.canRestart !== false && data.ownership?.kind !== 'external';
@@ -131,11 +202,21 @@ function renderStatus(data) {
   void can;
 }
 
-function escapeHtml(s) {
-  return s.replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
+function renderSamplingBaseline(sampling) {
+  const el = $('sampling-baseline');
+  if (!el || !sampling) return;
+  const n = sampling.native || {};
+  const r = sampling.ranges || {};
+  el.textContent =
+    `Splash 原生默认：temperature ${n.temperature} · top_p ${n.top_p} · top_k ${n.top_k}` +
+    (r.temperature ? `　范围：温度 ${r.temperature} / top_p ${r.top_p} / top_k ${r.top_k}` : '');
 }
 
-async function refreshStatus() {
+async function refreshStatus(options = {}) {
+  if (options.resetSpeed) {
+    // 先重置平均值再读数；重置失败不影响刷新本身
+    await api('/speed/reset', { method: 'POST', body: '{}' }).catch(() => {});
+  }
   const data = await api('/status');
   renderStatus(data);
   return data;
@@ -212,6 +293,7 @@ async function init() {
     badges.appendChild(span);
   }
   $('config-path').textContent = meta.configPath;
+  renderSamplingBaseline(meta.sampling);
 
   const cfg = await api('/config');
   fillConfig(cfg.config, cfg.upstreamPort);
@@ -230,7 +312,8 @@ $('draft-select').addEventListener('change', (e) => {
 $('useDflash').addEventListener('change', () => syncDflashUi());
 
 $('btn-refresh').addEventListener('click', () => {
-  refreshStatus().catch((err) => {
+  // 手动刷新 = 平均值重新开始累计（自动轮询不重置）
+  refreshStatus({ resetSpeed: true }).catch((err) => {
     $('ownership-msg').textContent = err.message;
   });
 });

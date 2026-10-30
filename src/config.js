@@ -18,6 +18,12 @@ const DEFAULT_CONFIG = {
   languageOnly: false,
   noWebui: false,
   splashBinary: '/opt/homebrew/bin/splash',
+  // 采样默认值：只在客户端请求缺该字段时补进请求体（见 src/sampling.js）。
+  // 默认值与 Splash 内置默认一致，所以默认开开关也不会改变行为。
+  applySamplingDefaults: true,
+  temperature: 1.0,
+  topP: 0.95,
+  topK: 20,
 };
 
 export function configDir() {
@@ -137,9 +143,12 @@ export function saveConfig(patch) {
   return {
     ok: true,
     config: { ...DEFAULT_CONFIG, ...finalCheck.config },
-    needsRestart: true,
+    needsRestart: finalCheck.needsRestart === true,
+    samplingImmediate: true,
     path: configPath(),
-    message: '配置已保存。需重启 Splash 服务后才会生效。',
+    message: finalCheck.needsRestart
+      ? '配置已保存。采样参数下次请求即生效；其它项需重启 Splash 才生效。'
+      : '配置已保存，即时生效。',
   };
 }
 

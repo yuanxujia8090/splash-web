@@ -153,6 +153,44 @@ export const FLAG_SPECS = {
     label: 'splash 可执行文件',
     help: '默认 /opt/homebrew/bin/splash 或 PATH 中的 splash',
   },
+
+  // --- 采样参数：不是 CLI flag，只在反代补缺省（见 src/sampling.js）---
+  applySamplingDefaults: {
+    flag: null,
+    type: 'boolean',
+    restart: false,
+    label: '启用采样默认值注入',
+    help: '关闭后不补任何字段，完全交给客户端与 Splash 原生默认',
+  },
+  temperature: {
+    flag: null,
+    type: 'number',
+    integer: false,
+    min: 0,
+    max: 2,
+    restart: false,
+    label: '温度 (temperature)',
+    help: 'Splash 原生默认 1.0；范围 [0, 2]，0 为贪心',
+  },
+  topP: {
+    flag: null,
+    type: 'number',
+    integer: false,
+    min: 0,
+    minExclusive: true,
+    max: 1,
+    restart: false,
+    label: 'Top-P (top_p)',
+    help: 'Splash 原生默认 0.95；范围 (0, 1]',
+  },
+  topK: {
+    flag: null,
+    type: 'number',
+    min: -1,
+    restart: false,
+    label: 'Top-K (top_k)',
+    help: 'Splash 原生默认 20；-1 或 0 关闭，或正整数',
+  },
 };
 
 export const ALLOWED_CONFIG_KEYS = new Set(Object.keys(FLAG_SPECS));
@@ -281,8 +319,25 @@ export function validateConfigPatch(input) {
       }
       config[key] = raw;
     } else if (spec.type === 'number') {
+      if (typeof raw !== 'number' && typeof raw !== 'string') {
+        return { ok: false, error: `${key} 必须是数字` };
+      }
       const n = typeof raw === 'number' ? raw : Number(raw);
-      if (!Number.isFinite(n) || n < 0 || !Number.isInteger(n)) {
+      // 既有数字项（端口、队列）仍要求非负整数；采样项显式声明 integer:false
+      const integer = spec.integer !== false;
+      const min = spec.min ?? 0;
+      const max = spec.max ?? null;
+      const belowMin = spec.minExclusive ? n <= min : n < min;
+      if (
+        !Number.isFinite(n) ||
+        (integer && !Number.isInteger(n)) ||
+        belowMin ||
+        (max !== null && n > max)
+      ) {
+        if (spec.min !== undefined || spec.max !== undefined) {
+          const lo = spec.minExclusive ? `(${min}` : `[${min}`;
+          return { ok: false, error: `${key} 必须在 ${lo}, ${max ?? '∞'}]` };
+        }
         return { ok: false, error: `${key} 必须是非负整数` };
       }
       if ((key === 'port' || key === 'upstreamPort') && (n < 1 || n > 65535)) {
