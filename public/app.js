@@ -68,6 +68,7 @@ function fillConfig(config, upstreamPort) {
   $('host').value = config.host || '127.0.0.1';
   $('maxMemory').value = config.maxMemory || '';
   $('maxContext').value = config.maxContext || '';
+  $('reasoningEffort').value = config.reasoningEffort || '';
   $('queueSize').value = config.queueSize ?? 32;
   $('idleRelease').value = config.idleRelease || '';
   $('offline').checked = !!config.offline;
@@ -100,6 +101,7 @@ function readForm() {
     host: $('host').value.trim(),
     maxMemory: $('maxMemory').value.trim(),
     maxContext: $('maxContext').value.trim(),
+    reasoningEffort: $('reasoningEffort').value,
     queueSize: Number($('queueSize').value),
     idleRelease: $('idleRelease').value.trim(),
     offline: $('offline').checked,
@@ -122,32 +124,15 @@ function fixed1(v) {
   return n.toFixed(1);
 }
 
-// 主值已经是平均值时不重复；只有主值走了实时窗口，才把平均挂出来对比
-function averageOf(average, source) {
-  if (source !== 'window') return null;
-  // 注意：不能先 Number(null) —— 那会得到 0，把「还没累计」显示成「平均 0.0」
-  if (average === null || average === undefined || average === '') return null;
-  const n = Number(average);
-  return Number.isFinite(n) ? n : null;
-}
+// 速度口径：主值是最近约 1 秒的实时窗口（秒级刷新）；这两个指标旁边再挂累计平均值。
+// 平均值只给这两个速度指标，其他指标一律不展示。
+const SPEED_HINT = '主值：最近约 1 秒的实测吞吐（滑动窗口，秒级刷新）；平均：从上次重置起累计的速度';
 
-// 速度来源标记：让「实时窗口」和「历史平均」一眼可分，别让数值回落被误判成性能掉了
-function speedTag(source) {
-  if (source === 'window') {
-    return {
-      label: '实时',
-      tone: 'live',
-      title: '最近约 1 秒的实测吞吐（对齐 pi-token-speed 的滑动窗口）',
-    };
-  }
-  if (source === 'average') {
-    return {
-      label: '平均',
-      tone: 'avg',
-      title: '最近 1 秒没有新增 token，显示 Splash 的累计平均速度',
-    };
-  }
-  return null;
+// 累计平均：null/空不渲染（不能先 Number(null)，那会变成 0）
+function averageOf(v) {
+  if (v === null || v === undefined || v === '') return null;
+  const n = Number(v);
+  return Number.isFinite(n) ? n : null;
 }
 
 function renderStatus(data) {
@@ -159,8 +144,8 @@ function renderStatus(data) {
 
   const rows = [
     ['Ready', data.probe?.ready ? '是' : '否'],
-    ['Decode tok/s', fixed1(s.decodeTokPerSec), speedTag(speed.decodeSource), averageOf(speed.decodeAverageTokPerSec, speed.decodeSource)],
-    ['Prefill tok/s', fixed1(s.prefillTokPerSec), speedTag(speed.prefillSource), averageOf(speed.prefillAverageTokPerSec, speed.prefillSource)],
+    ['Decode tok/s', fixed1(speed.decodeWindowTokPerSec), SPEED_HINT, averageOf(speed.decodeAverageTokPerSec)],
+    ['Prefill tok/s', fixed1(speed.prefillWindowTokPerSec), SPEED_HINT, averageOf(speed.prefillAverageTokPerSec)],
     ['活跃请求', s.activeRequests ?? 0],
     ['队列', s.queued ?? 0],
     ['HTTP 并发', `${s.httpActive ?? 0}${s.httpCapacity != null ? ' / ' + s.httpCapacity : ''}`],
@@ -170,24 +155,18 @@ function renderStatus(data) {
   ];
   const stats = $('stats');
   stats.textContent = '';
-  for (const [k, v, tag, average] of rows) {
+  for (const [k, v, hint, average = null] of rows) {
     const row = document.createElement('div');
     const dt = document.createElement('dt');
     dt.textContent = String(k);
+    if (hint) dt.title = hint;
     const dd = document.createElement('dd');
     dd.textContent = String(v);
-    if (tag) {
-      const badge = document.createElement('span');
-      badge.className = 'speed-tag ' + tag.tone;
-      badge.textContent = tag.label;
-      badge.title = tag.title;
-      dd.append(badge);
-    }
-    if (average !== null) {
+    if (Number.isFinite(average)) {
       const avg = document.createElement('span');
       avg.className = 'speed-avg';
       avg.textContent = '平均 ' + fixed1(average);
-      avg.title = 'Splash 上报的累计平均速度，用来对照实时值';
+      avg.title = '从上次重置起累计的平均速度（不随实时值跳动）';
       dd.append(avg);
     }
     row.append(dt, dd);
@@ -405,6 +384,14 @@ init().catch((err) => {
   $('verdict').className = 'verdict offline';
 });
 
+// 秒级刷新；上一轮没回来就跳过，避免上游卡住时请求堆积
+let statusInFlight = false;
 setInterval(() => {
-  refreshStatus().catch(() => {});
-}, 5000);
+  if (statusInFlight) return;
+  statusInFlight = true;
+  refreshStatus()
+    .catch(() => {})
+    .finally(() => {
+      statusInFlight = false;
+    });
+}, 1000);

@@ -89,6 +89,21 @@
             </label>
             <p class="hint">优先扫描 <code>~/.lmstudio/models</code> 与 <code>~/.omlx/models</code>，不重复下载。下拉选<strong>本地目录</strong>时走 Splash <code>prepare_local_model</code>；也可手填 <code>owner/repo</code> 走 <code>splash serve</code>。</p>
 
+            <label class="field">
+              <span class="field-label">思考等级 (--default-reasoning-effort)</span>
+              <select id="reasoningEffort" name="reasoningEffort" form="config-form">
+                <option value="">模型模板默认（不指定）</option>
+                <option value="none">none · 不思考</option>
+                <option value="minimal">minimal · 最少</option>
+                <option value="low">low · 低</option>
+                <option value="medium">medium · 中</option>
+                <option value="high">high · 高</option>
+                <option value="xhigh">xhigh · 很高</option>
+                <option value="max">max · 最大</option>
+              </select>
+            </label>
+            <p class="hint">只作用于<strong>请求里没自带</strong>思考等级/预算的 Chat 与 Responses。改完需重启 Splash。</p>
+
             <div class="switch-row">
               <label class="switch">
                 <input type="checkbox" id="useDflash" name="useDflash" form="config-form" />

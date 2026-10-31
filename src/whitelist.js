@@ -53,6 +53,14 @@ export const FLAG_SPECS = {
     label: '上下文上限 (--max-context)',
     help: '如 128K 或 1M',
   },
+  reasoningEffort: {
+    flag: '--default-reasoning-effort',
+    type: 'enum',
+    values: ['none', 'minimal', 'low', 'medium', 'high', 'xhigh', 'max'],
+    restart: true,
+    label: '思考等级 (--default-reasoning-effort)',
+    help: '只对请求里没写思考等级/预算的 Chat 与 Responses 生效；留空 = 模型模板默认',
+  },
   queueSize: {
     flag: '--queue-size',
     type: 'number',

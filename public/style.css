@@ -334,33 +334,7 @@ h2 {
   word-break: break-all;
 }
 
-/* 速度来源：实时窗口 / 历史平均，别让数值回落被误判成性能掉了 */
-.stats .speed-tag {
-  display: inline-block;
-  margin-left: 0.4rem;
-  padding: 0.02rem 0.34rem;
-  border: 1px solid transparent;
-  border-radius: 999px;
-  font-size: 0.64rem;
-  font-weight: 500;
-  letter-spacing: 0.02em;
-  vertical-align: 0.14em;
-  white-space: nowrap;
-}
-
-.stats .speed-tag.live {
-  color: var(--accent);
-  border-color: color-mix(in srgb, var(--accent) 30%, transparent);
-  background: color-mix(in srgb, var(--accent) 9%, transparent);
-}
-
-.stats .speed-tag.avg {
-  color: var(--muted);
-  border-color: var(--hairline);
-  background: transparent;
-}
-
-/* 对照用的累计平均值：比主值浅一档，不抢读数 */
+/* 累计平均：只挂在两个速度指标后面，比主值浅一档，不抢读数 */
 .stats .speed-avg {
   display: inline-block;
   margin-left: 0.45rem;

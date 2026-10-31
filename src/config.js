@@ -10,6 +10,9 @@ const DEFAULT_CONFIG = {
   host: '127.0.0.1',
   maxMemory: '',
   maxContext: '',
+  // 思考等级：--default-reasoning-effort（none/minimal/low/medium/high/xhigh/max）。
+  // 空串 = 不传该 flag，沿用 Splash 模型模板的默认。
+  reasoningEffort: '',
   queueSize: 32,
   idleRelease: '',
   useDflash: true,

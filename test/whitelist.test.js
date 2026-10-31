@@ -54,6 +54,17 @@ describe('validateConfigPatch', () => {
     assert.equal(r.ok, true);
     assert.equal(r.config.useDflash, false);
   });
+
+  it('accepts reasoningEffort enum and rejects unknown levels', () => {
+    for (const effort of ['none', 'minimal', 'low', 'medium', 'high', 'xhigh', 'max']) {
+      const r = validateConfigPatch({ reasoningEffort: effort });
+      assert.equal(r.ok, true, effort);
+      assert.equal(r.config.reasoningEffort, effort);
+      assert.equal(r.needsRestart, true);
+    }
+    assert.equal(validateConfigPatch({ reasoningEffort: 'ultra' }).ok, false);
+    assert.equal(validateConfigPatch({ reasoningEffort: 3 }).ok, false);
+  });
 });
 
 describe('isLocalModelPath / deriveHfId', () => {
@@ -203,6 +214,41 @@ describe('buildServeArgv / buildLaunchPlan', () => {
     });
     const portIdx = args.indexOf('--port');
     assert.equal(args[portIdx + 1], '18000');
+  });
+
+  it('reasoningEffort emits --default-reasoning-effort in HF and local plans', () => {
+    const hf = buildServeArgv({
+      model: 'owner/repo:Q4',
+      port: 8000,
+      host: '127.0.0.1',
+      reasoningEffort: 'medium',
+      splashBinary: '/opt/homebrew/bin/splash',
+    });
+    const hfIdx = hf.args.indexOf('--default-reasoning-effort');
+    assert.equal(hf.args[hfIdx + 1], 'medium');
+
+    const loc = buildLaunchPlan(
+      {
+        model: '/Users/yuanxj/.lmstudio/models/mlx-community/Qwen3.8-27B-4bit',
+        port: 8000,
+        host: '127.0.0.1',
+        reasoningEffort: 'high',
+        splashBinary: '/opt/homebrew/bin/splash',
+      },
+      { preparedDir: '/tmp/prepared-fake', prepareLocal: false },
+    );
+    const locIdx = loc.args.indexOf('--default-reasoning-effort');
+    assert.ok(locIdx >= 0, 'local plan must forward the flag');
+    assert.equal(loc.args[locIdx + 1], 'high');
+
+    const empty = buildServeArgv({
+      model: 'owner/repo:Q4',
+      port: 8000,
+      host: '127.0.0.1',
+      reasoningEffort: '',
+      splashBinary: '/opt/homebrew/bin/splash',
+    });
+    assert.ok(!empty.args.includes('--default-reasoning-effort'), 'empty = model template default');
   });
 
   it('requires model', () => {
