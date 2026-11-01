@@ -5,3 +5,5 @@ data/managed.json
 .DS_Store
 *.log
 .vscode
+# 项目统一用 npm（README 与 package-lock.json）；pnpm 旁路生成的锁文件不入库
+pnpm-lock.yaml
