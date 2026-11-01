@@ -4,6 +4,8 @@
 
 许可证：Apache-2.0（与 [incoai/splash](https://github.com/incoai/splash) 兼容）。
 
+中文 | [English](README.en.md)
+
 ## 3 步打开管理页
 
 ```bash
